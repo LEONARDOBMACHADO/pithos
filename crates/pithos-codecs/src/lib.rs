@@ -16,6 +16,29 @@ pub type CodecVersion = u16;
 
 const CODEC_VERSION_V1: CodecVersion = 1;
 const COPY_BUFFER_SIZE: usize = 8 * 1024;
+const MIB: u64 = 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CodecConfig {
+    pub level: i32,
+}
+
+impl CodecConfig {
+    pub const fn deterministic_default(codec: CodecId) -> Self {
+        let level = match codec {
+            CodecId::Store => 0,
+            CodecId::Zstd | CodecId::Brotli => 9,
+            CodecId::Lzma2 => 6,
+        };
+        Self { level }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CodecStats {
+    pub input_bytes: u64,
+    pub output_bytes: u64,
+}
 
 /// The mandatory Zstd codec, with deterministic single-threaded parameters.
 pub struct ZstdCodec;
@@ -31,9 +54,32 @@ pub trait Codec: Send + Sync {
     fn version(&self) -> CodecVersion {
         CODEC_VERSION_V1
     }
-    fn encode(&self, input: &[u8], output: &mut dyn Write) -> Result<u64>;
+    fn encode(&self, input: &[u8], cfg: &CodecConfig, output: &mut dyn Write)
+    -> Result<CodecStats>;
     fn decode(&self, input: &mut dyn Read, expected_len: u64, output: &mut dyn Write)
     -> Result<()>;
+    fn memory_bound(&self, input_len: u64, cfg: &CodecConfig) -> Result<u64>;
+}
+
+fn checked_memory_bound(input_len: u64, scratch_bytes: u64) -> Result<u64> {
+    input_len
+        .checked_add(scratch_bytes)
+        .ok_or(PithosError::IntegerOverflow)
+}
+
+fn validate_level(cfg: &CodecConfig, range: std::ops::RangeInclusive<i32>) -> Result<()> {
+    if range.contains(&cfg.level) {
+        Ok(())
+    } else {
+        Err(PithosError::InvalidMetadata("unsupported codec level"))
+    }
+}
+
+fn stats(input: &[u8], output_bytes: usize) -> CodecStats {
+    CodecStats {
+        input_bytes: input.len() as u64,
+        output_bytes: output_bytes as u64,
+    }
 }
 
 fn copy_decoded_limited(
@@ -72,9 +118,15 @@ impl Codec for StoreCodec {
         CodecId::Store
     }
 
-    fn encode(&self, input: &[u8], output: &mut dyn Write) -> Result<u64> {
+    fn encode(
+        &self,
+        input: &[u8],
+        cfg: &CodecConfig,
+        output: &mut dyn Write,
+    ) -> Result<CodecStats> {
+        validate_level(cfg, 0..=0)?;
         output.write_all(input)?;
-        Ok(input.len() as u64)
+        Ok(stats(input, input.len()))
     }
 
     fn decode(
@@ -96,6 +148,11 @@ impl Codec for StoreCodec {
         }
         Ok(())
     }
+
+    fn memory_bound(&self, input_len: u64, cfg: &CodecConfig) -> Result<u64> {
+        validate_level(cfg, 0..=0)?;
+        checked_memory_bound(input_len, 1)
+    }
 }
 
 impl Codec for ZstdCodec {
@@ -103,11 +160,17 @@ impl Codec for ZstdCodec {
         CodecId::Zstd
     }
 
-    fn encode(&self, input: &[u8], output: &mut dyn Write) -> Result<u64> {
-        // Level 9 is fixed and zstd's streaming helper is single-threaded.
-        let encoded = zstd::stream::encode_all(input, 9)?;
+    fn encode(
+        &self,
+        input: &[u8],
+        cfg: &CodecConfig,
+        output: &mut dyn Write,
+    ) -> Result<CodecStats> {
+        validate_level(cfg, -7..=22)?;
+        // The streaming helper is single-threaded and deterministic.
+        let encoded = zstd::stream::encode_all(input, cfg.level)?;
         output.write_all(&encoded)?;
-        Ok(encoded.len() as u64)
+        Ok(stats(input, encoded.len()))
     }
 
     fn decode(
@@ -119,6 +182,11 @@ impl Codec for ZstdCodec {
         let mut decoder = zstd::stream::read::Decoder::new(input)?;
         copy_decoded_limited(&mut decoder, expected_len, output)
     }
+
+    fn memory_bound(&self, input_len: u64, cfg: &CodecConfig) -> Result<u64> {
+        validate_level(cfg, -7..=22)?;
+        checked_memory_bound(input_len, 128 * MIB)
+    }
 }
 
 impl Codec for BrotliCodec {
@@ -126,13 +194,20 @@ impl Codec for BrotliCodec {
         CodecId::Brotli
     }
 
-    fn encode(&self, input: &[u8], output: &mut dyn Write) -> Result<u64> {
-        // Quality/window are deliberately fixed for reproducible output.
-        let mut encoder = brotli::CompressorWriter::new(Vec::new(), COPY_BUFFER_SIZE, 9, 22);
+    fn encode(
+        &self,
+        input: &[u8],
+        cfg: &CodecConfig,
+        output: &mut dyn Write,
+    ) -> Result<CodecStats> {
+        validate_level(cfg, 0..=11)?;
+        // Window is deliberately fixed for reproducible output.
+        let mut encoder =
+            brotli::CompressorWriter::new(Vec::new(), COPY_BUFFER_SIZE, cfg.level as u32, 22);
         encoder.write_all(input)?;
         let encoded = encoder.into_inner();
         output.write_all(&encoded)?;
-        Ok(encoded.len() as u64)
+        Ok(stats(input, encoded.len()))
     }
 
     fn decode(
@@ -144,6 +219,11 @@ impl Codec for BrotliCodec {
         let mut decoder = brotli::Decompressor::new(input, COPY_BUFFER_SIZE);
         copy_decoded_limited(&mut decoder, expected_len, output)
     }
+
+    fn memory_bound(&self, input_len: u64, cfg: &CodecConfig) -> Result<u64> {
+        validate_level(cfg, 0..=11)?;
+        checked_memory_bound(input_len, 32 * MIB)
+    }
 }
 
 impl Codec for Lzma2Codec {
@@ -151,11 +231,17 @@ impl Codec for Lzma2Codec {
         CodecId::Lzma2
     }
 
-    fn encode(&self, input: &[u8], output: &mut dyn Write) -> Result<u64> {
-        // The crate's default encoder is single-threaded; preset 6 is fixed.
-        let encoded = liblzma::encode_all(input, 6)?;
+    fn encode(
+        &self,
+        input: &[u8],
+        cfg: &CodecConfig,
+        output: &mut dyn Write,
+    ) -> Result<CodecStats> {
+        validate_level(cfg, 0..=9)?;
+        // The crate's default encoder is single-threaded.
+        let encoded = liblzma::encode_all(input, cfg.level as u32)?;
         output.write_all(&encoded)?;
-        Ok(encoded.len() as u64)
+        Ok(stats(input, encoded.len()))
     }
 
     fn decode(
@@ -166,6 +252,14 @@ impl Codec for Lzma2Codec {
     ) -> Result<()> {
         let mut decoder = liblzma::read::XzDecoder::new(input);
         copy_decoded_limited(&mut decoder, expected_len, output)
+    }
+
+    fn memory_bound(&self, input_len: u64, cfg: &CodecConfig) -> Result<u64> {
+        validate_level(cfg, 0..=9)?;
+        let dictionary_bound = 1_u64
+            .checked_shl((cfg.level as u32) + 20)
+            .ok_or(PithosError::IntegerOverflow)?;
+        checked_memory_bound(input_len, dictionary_bound)
     }
 }
 
@@ -183,7 +277,9 @@ mod tests {
 
     fn assert_round_trip(codec: &dyn Codec) {
         let mut encoded = Vec::new();
-        let stats = codec.encode(SAMPLE, &config(codec.id()), &mut encoded).unwrap();
+        let stats = codec
+            .encode(SAMPLE, &config(codec.id()), &mut encoded)
+            .unwrap();
         assert_eq!(stats.input_bytes, SAMPLE.len() as u64);
         assert_eq!(stats.output_bytes, encoded.len() as u64);
         let mut decoded = Vec::new();
@@ -222,11 +318,7 @@ mod tests {
         for codec in [&ZstdCodec as &dyn Codec, &BrotliCodec, &Lzma2Codec] {
             let mut encoded = Vec::new();
             codec
-                .encode(
-                    &vec![7; 16 * 1024],
-                    &config(codec.id()),
-                    &mut encoded,
-                )
+                .encode(&vec![7; 16 * 1024], &config(codec.id()), &mut encoded)
                 .unwrap();
             let result = codec.decode(&mut Cursor::new(encoded), 1, &mut Vec::new());
             assert!(matches!(
@@ -241,11 +333,7 @@ mod tests {
         for codec in [&ZstdCodec as &dyn Codec, &BrotliCodec, &Lzma2Codec] {
             let mut encoded = Vec::new();
             codec
-                .encode(
-                    &vec![3; 4 * 1024],
-                    &config(codec.id()),
-                    &mut encoded,
-                )
+                .encode(&vec![3; 4 * 1024], &config(codec.id()), &mut encoded)
                 .unwrap();
             let corruption_offset = encoded.len() / 2;
             encoded[corruption_offset] ^= 0x80;
@@ -274,15 +362,15 @@ mod tests {
             &BrotliCodec,
             &Lzma2Codec,
         ] {
-            let bound = codec
-                .memory_bound(64 * 1024, &config(codec.id()))
-                .unwrap();
+            let bound = codec.memory_bound(64 * 1024, &config(codec.id())).unwrap();
             assert!(bound >= 64 * 1024);
             assert_eq!(codec.version(), 1);
         }
-        assert!(StoreCodec
-            .memory_bound(u64::MAX, &config(CodecId::Store))
-            .is_err());
+        assert!(
+            StoreCodec
+                .memory_bound(u64::MAX, &config(CodecId::Store))
+                .is_err()
+        );
     }
 
     #[test]
