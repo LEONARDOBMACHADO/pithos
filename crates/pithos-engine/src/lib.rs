@@ -296,7 +296,7 @@ pub fn pack_with_limits_and_control(
     let mut entries = Vec::with_capacity(scanned.len());
     let mut groups = Vec::new();
     let mut restore_map = Vec::new();
-    let mut hardlinks: HashMap<same_file::Handle, (u64, u64, [u8; 32])> = HashMap::new();
+    let mut hardlinks: HashMap<Arc<same_file::Handle>, (u64, u64, [u8; 32])> = HashMap::new();
     let mut payload_crc = 0_u32;
     let mut original_total_size = 0_u64;
 
@@ -333,7 +333,7 @@ pub fn pack_with_limits_and_control(
                 if original_total_size > decode_limits.max_original_bytes {
                     return Err(PithosError::ResourceLimit("tamanho original"));
                 }
-                let identity = file_identity(&scanned_entry.source);
+                let identity = scanned_entry.identity.clone();
                 if let Some((target_entry_id, target_size, target_hash)) = identity
                     .as_ref()
                     .and_then(|key| hardlinks.get(key))
@@ -359,6 +359,7 @@ pub fn pack_with_limits_and_control(
                     let (actual_size, file_hash, file_crc) = copy_input_file(
                         &scanned_entry.source,
                         &scanned_entry.metadata,
+                        identity.as_ref(),
                         &mut spool,
                         &mut payload_crc,
                         cancellation,
@@ -561,6 +562,8 @@ struct CompressedSource {
     path: PathBuf,
     size: u64,
     hash: [u8; 32],
+    modified: Option<std::time::SystemTime>,
+    identity: Option<Arc<same_file::Handle>>,
 }
 
 fn pack_compressed_with_limits(
@@ -597,7 +600,7 @@ fn pack_compressed_with_limits(
     let scanned = scan_inputs(&request.inputs, &decode_limits, cancellation)?;
     let mut entries = Vec::with_capacity(scanned.len());
     let mut sources = Vec::<CompressedSource>::new();
-    let mut hardlinks: HashMap<same_file::Handle, (u64, u64, [u8; 32])> = HashMap::new();
+    let mut hardlinks: HashMap<Arc<same_file::Handle>, (u64, u64, [u8; 32])> = HashMap::new();
     let mut original_total_size = 0_u64;
 
     for scanned_entry in scanned {
@@ -633,7 +636,7 @@ fn pack_compressed_with_limits(
                 if original_total_size > decode_limits.max_original_bytes {
                     return Err(PithosError::ResourceLimit("tamanho original"));
                 }
-                let identity = file_identity(&scanned_entry.source);
+                let identity = scanned_entry.identity.clone();
                 if let Some((target_entry_id, target_size, target_hash)) = identity
                     .as_ref()
                     .and_then(|key| hardlinks.get(key))
@@ -651,6 +654,7 @@ fn pack_compressed_with_limits(
                     let (actual_size, file_hash) = hash_input_file(
                         &scanned_entry.source,
                         &scanned_entry.metadata,
+                        identity.clone(),
                         cancellation,
                     )?;
                     sources.push(CompressedSource {
@@ -658,6 +662,8 @@ fn pack_compressed_with_limits(
                         path: scanned_entry.source.clone(),
                         size: actual_size,
                         hash: file_hash,
+                        modified: scanned_entry.metadata.modified().ok(),
+                        identity: identity.clone(),
                     });
                     if let Some(identity) = identity {
                         hardlinks.insert(identity, (entry_id, actual_size, file_hash));
@@ -1071,13 +1077,22 @@ fn encode_solid_group(
 fn hash_input_file(
     path: &Path,
     initial_metadata: &fs::Metadata,
+    initial_identity: Option<Arc<same_file::Handle>>,
     cancellation: &CancellationToken,
 ) -> Result<(u64, [u8; 32])> {
+    let current_metadata = fs::metadata(path)?;
+    if !same_file_metadata(initial_metadata, &current_metadata)
+        || file_identity(path).as_ref() != initial_identity.as_ref()
+    {
+        return Err(PithosError::InputChanged);
+    }
     let source = CompressedSource {
         entry_id: 0,
         path: path.to_path_buf(),
         size: initial_metadata.len(),
         hash: [0; 32],
+        modified: initial_metadata.modified().ok(),
+        identity: initial_identity,
     };
     let task_cancellation = scheduler::CancellationToken::new();
     let mut bytes = Vec::new();
@@ -1110,9 +1125,10 @@ fn read_source_bytes(
     verify_hash: bool,
 ) -> Result<()> {
     let initial = fs::metadata(&source.path)?;
-    let expected_modified = initial.modified().ok();
-    let expected_identity = file_identity(&source.path);
-    if initial.len() != source.size {
+    if initial.len() != source.size
+        || initial.modified().ok() != source.modified
+        || file_identity(&source.path).as_ref() != source.identity.as_ref()
+    {
         return Err(PithosError::InputChanged);
     }
     let start = output.len();
@@ -1141,8 +1157,8 @@ fn read_source_bytes(
         .ok_or(PithosError::IntegerOverflow)?;
     if u64::try_from(written).map_err(|_| PithosError::IntegerOverflow)? != source.size
         || final_metadata.len() != source.size
-        || final_metadata.modified().ok() != expected_modified
-        || file_identity(&source.path) != expected_identity
+        || final_metadata.modified().ok() != source.modified
+        || file_identity(&source.path).as_ref() != source.identity.as_ref()
         || (verify_hash && blake3::hash(&output[start..]).as_bytes() != &source.hash)
     {
         return Err(PithosError::InputChanged);
@@ -2320,13 +2336,18 @@ fn digest_range(
 fn copy_input_file(
     path: &Path,
     initial_metadata: &fs::Metadata,
+    initial_identity: Option<&Arc<same_file::Handle>>,
     destination: &mut tempfile::NamedTempFile,
     payload_crc: &mut u32,
     cancellation: &CancellationToken,
 ) -> Result<(u64, [u8; 32], u32)> {
     let expected_length = initial_metadata.len();
-    let expected_modified = initial_metadata.modified().ok();
-    let expected_identity = file_identity(path);
+    let current_metadata = fs::metadata(path)?;
+    if !same_file_metadata(initial_metadata, &current_metadata)
+        || file_identity(path).as_ref() != initial_identity
+    {
+        return Err(PithosError::InputChanged);
+    }
     let mut source = File::open(path)?;
     let mut buffer = [0_u8; IO_BUFFER_SIZE];
     let mut written = 0_u64;
@@ -2351,9 +2372,8 @@ fn copy_input_file(
     }
     let final_metadata = fs::metadata(path)?;
     if written != expected_length
-        || final_metadata.len() != expected_length
-        || final_metadata.modified().ok() != expected_modified
-        || file_identity(path) != expected_identity
+        || !same_file_metadata(initial_metadata, &final_metadata)
+        || file_identity(path).as_ref() != initial_identity
     {
         return Err(PithosError::InputChanged);
     }
@@ -2366,6 +2386,7 @@ struct ScannedEntry {
     archive_path: ArchivePath,
     sort_key: Vec<u8>,
     metadata: fs::Metadata,
+    identity: Option<Arc<same_file::Handle>>,
     kind: ScannedKind,
 }
 
@@ -2610,6 +2631,7 @@ fn scan_node(
             archive_path,
             sort_key,
             metadata,
+            identity: None,
             kind: ScannedKind::Symlink {
                 target,
                 target_is_dir,
@@ -2622,6 +2644,7 @@ fn scan_node(
             archive_path,
             sort_key,
             metadata,
+            identity: None,
             kind: ScannedKind::Directory,
         });
         scan_directory_children(
@@ -2634,12 +2657,14 @@ fn scan_node(
             cancellation,
         )?;
     } else if metadata.is_file() {
+        let identity = file_identity(source);
         budget.retain_entry(source, &archive_path, &sort_key, 0)?;
         entries.push(ScannedEntry {
             source: source.to_path_buf(),
             archive_path,
             sort_key,
             metadata,
+            identity,
             kind: ScannedKind::File,
         });
     } else {
@@ -2670,8 +2695,12 @@ fn link_target_memory_bytes(target: &LinkTarget) -> Result<u64> {
         })
 }
 
-fn file_identity(path: &Path) -> Option<same_file::Handle> {
-    same_file::Handle::from_path(path).ok()
+fn file_identity(path: &Path) -> Option<Arc<same_file::Handle>> {
+    same_file::Handle::from_path(path).ok().map(Arc::new)
+}
+
+fn same_file_metadata(expected: &fs::Metadata, actual: &fs::Metadata) -> bool {
+    expected.len() == actual.len() && expected.modified().ok() == actual.modified().ok()
 }
 
 fn modified_ns(metadata: &fs::Metadata) -> i64 {
@@ -2781,7 +2810,7 @@ mod tests {
         fs::remove_file(&input).unwrap();
         fs::write(&input, b"after!").unwrap();
 
-        let error = hash_input_file(&input, &initial_metadata, &CancellationToken::new())
+        let error = hash_input_file(&input, &initial_metadata, None, &CancellationToken::new())
             .expect_err("a same-length replacement after scan must be rejected");
 
         assert!(matches!(error, PithosError::InputChanged));
