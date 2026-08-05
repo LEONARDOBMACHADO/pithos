@@ -657,9 +657,15 @@ impl DaemonService {
                 .iter()
                 .map(|method| method.as_str().to_owned())
                 .collect(),
-            supported_codecs: vec!["STORE".to_owned()],
+            supported_codecs: ["STORE", "Zstandard", "Brotli", "LZMA2"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
             supported_transforms: Vec::new(),
-            supported_profiles: vec!["raw".to_owned()],
+            supported_profiles: ["raw", "stream", "random", "balanced", "archive-max"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
             mount: false,
             maximum_job_limits: self.inner.config.quota_policy.maximum_job_limits.clone(),
             session: SessionCapability {
@@ -1214,6 +1220,10 @@ fn execute_operation(
                     output: output.clone(),
                     profile: match profile {
                         ApiProfile::Raw => CompressionProfile::Raw,
+                        ApiProfile::Stream => CompressionProfile::Stream,
+                        ApiProfile::Random => CompressionProfile::Random,
+                        ApiProfile::Balanced => CompressionProfile::Balanced,
+                        ApiProfile::ArchiveMax => CompressionProfile::ArchiveMax,
                     },
                 },
                 &PackLimits {

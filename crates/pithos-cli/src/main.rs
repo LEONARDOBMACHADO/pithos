@@ -76,9 +76,10 @@ fn run_standalone(command: Commands, output_format: OutputFormat) -> Result<(), 
             &json!({
                 "version": env!("CARGO_PKG_VERSION"),
                 "format": "PAF 0.1-draft",
-                "codecs": ["STORE"],
+                "codecs": ["STORE", "Zstandard", "Brotli", "LZMA2"],
+                "profiles": ["raw", "stream", "random", "balanced", "archive-max"],
             }),
-            "Pithos R1 v0.1.0 (PAF 0.1-draft)\nCodecs implementados: STORE",
+            "Pithos R1 v0.1.0 (PAF 0.1-draft)\nCodecs implementados: STORE, Zstandard, Brotli, LZMA2\nPerfis: raw, stream, random, balanced, archive-max",
         )?,
         Commands::Pack {
             inputs,
@@ -599,12 +600,20 @@ fn ensure_stdout_format(format: OutputFormat) -> Result<(), AppError> {
 fn standalone_profile(profile: CliProfile) -> CompressionProfile {
     match profile {
         CliProfile::Raw => CompressionProfile::Raw,
+        CliProfile::Stream => CompressionProfile::Stream,
+        CliProfile::Random => CompressionProfile::Random,
+        CliProfile::Balanced => CompressionProfile::Balanced,
+        CliProfile::ArchiveMax => CompressionProfile::ArchiveMax,
     }
 }
 
 fn daemon_profile(profile: CliProfile) -> ApiProfile {
     match profile {
         CliProfile::Raw => ApiProfile::Raw,
+        CliProfile::Stream => ApiProfile::Stream,
+        CliProfile::Random => ApiProfile::Random,
+        CliProfile::Balanced => ApiProfile::Balanced,
+        CliProfile::ArchiveMax => ApiProfile::ArchiveMax,
     }
 }
 

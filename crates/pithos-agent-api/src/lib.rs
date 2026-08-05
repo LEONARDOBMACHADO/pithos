@@ -442,6 +442,10 @@ pub struct JobContext {
 #[serde(rename_all = "snake_case")]
 pub enum ApiProfile {
     Raw,
+    Stream,
+    Random,
+    Balanced,
+    ArchiveMax,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -756,7 +760,7 @@ mod tests {
             (ApiProfile::ArchiveMax, "archive_max"),
         ];
         for (profile, expected) in cases {
-            assert_eq!(serde_json::to_value(profile).unwrap(), expected);
+            assert_eq!(serde_json::to_value(&profile).unwrap(), expected);
             assert_eq!(
                 serde_json::from_value::<ApiProfile>(json!(expected)).unwrap(),
                 profile

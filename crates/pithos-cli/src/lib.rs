@@ -9,6 +9,10 @@ pub use daemon_client::{DaemonClient, DaemonClientError, default_daemon_state_di
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CliProfile {
     Raw,
+    Stream,
+    Random,
+    Balanced,
+    ArchiveMax,
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,16 +136,18 @@ mod tests {
                 Commands::Pack { profile, .. } if profile == expected
             ));
         }
-        assert!(Cli::try_parse_from([
-            "pithos",
-            "pack",
-            "input",
-            "-o",
-            "archive.pithos",
-            "--profile",
-            "unknown",
-        ])
-        .is_err());
+        assert!(
+            Cli::try_parse_from([
+                "pithos",
+                "pack",
+                "input",
+                "-o",
+                "archive.pithos",
+                "--profile",
+                "unknown",
+            ])
+            .is_err()
+        );
     }
 
     #[test]
