@@ -20,10 +20,14 @@ pub struct ChunkingConfig {
     pub micro_file_max: u32,
     pub micro_pack_target: u32,
     pub max_chunks: u64,
+    pub max_logical_bytes: u64,
+    pub max_metadata_bytes: u64,
+    pub max_path_bytes: u64,
 }
 
 impl Default for ChunkingConfig {
     fn default() -> Self {
+        let limits = DecodeLimits::default();
         Self {
             fastcdc_min: 64 * KIB,
             fastcdc_avg: 256 * KIB,
@@ -31,7 +35,10 @@ impl Default for ChunkingConfig {
             high_entropy_fixed: MIB,
             micro_file_max: 64 * KIB,
             micro_pack_target: 4 * MIB,
-            max_chunks: DecodeLimits::default().max_chunks,
+            max_chunks: limits.max_chunks,
+            max_logical_bytes: limits.max_original_bytes,
+            max_metadata_bytes: limits.max_metadata_bytes,
+            max_path_bytes: limits.max_path_bytes,
         }
     }
 }
@@ -63,8 +70,12 @@ impl ChunkingConfig {
         {
             return Err(PithosError::InvalidMetadata("microfile pack target"));
         }
-        if self.max_chunks == 0 {
-            return Err(PithosError::InvalidMetadata("chunk count limit"));
+        if self.max_chunks == 0
+            || self.max_logical_bytes == 0
+            || self.max_metadata_bytes == 0
+            || self.max_path_bytes == 0
+        {
+            return Err(PithosError::InvalidMetadata("chunking resource limit"));
         }
         Ok(())
     }
@@ -114,10 +125,26 @@ pub fn chunk_fastcdc(
     origin: ChunkOrigin,
     config: &ChunkingConfig,
 ) -> Result<Vec<LogicalChunkDraft>> {
+    chunk_fastcdc_with_checkpoint(data, origin, config, || Ok(()))
+}
+
+/// In-memory FastCDC with a cooperative checkpoint before every bounded chunk
+/// scan.
+pub fn chunk_fastcdc_with_checkpoint<F>(
+    data: &[u8],
+    origin: ChunkOrigin,
+    config: &ChunkingConfig,
+    mut checkpoint: F,
+) -> Result<Vec<LogicalChunkDraft>>
+where
+    F: FnMut() -> Result<()>,
+{
     config.validate()?;
+    let logical_size = u64::try_from(data.len()).map_err(|_| PithosError::IntegerOverflow)?;
+    ensure_logical_size(logical_size, config)?;
     origin
         .base_offset
-        .checked_add(u64::try_from(data.len()).map_err(|_| PithosError::IntegerOverflow)?)
+        .checked_add(logical_size)
         .ok_or(PithosError::IntegerOverflow)?;
 
     let mut chunks = Vec::new();
@@ -130,6 +157,7 @@ pub fn chunk_fastcdc(
         FASTCDC_SEED,
     );
     for chunk in chunker {
+        checkpoint()?;
         push_relative_chunk(
             &mut chunks,
             origin,
@@ -139,11 +167,7 @@ pub fn chunk_fastcdc(
             config.max_chunks,
         )?;
     }
-    validate_chunk_coverage(
-        &chunks,
-        origin,
-        u64::try_from(data.len()).map_err(|_| PithosError::IntegerOverflow)?,
-    )?;
+    validate_chunk_coverage(&chunks, origin, logical_size)?;
     Ok(chunks)
 }
 
@@ -193,6 +217,10 @@ where
         if chunk.offset != logical_size || chunk.data.len() != chunk.length {
             return Err(PithosError::InvalidMetadata("FastCDC stream layout"));
         }
+        let next_size = logical_size
+            .checked_add(u64::try_from(chunk.length).map_err(|_| PithosError::IntegerOverflow)?)
+            .ok_or(PithosError::IntegerOverflow)?;
+        ensure_logical_size(next_size, config)?;
         push_relative_chunk(
             &mut chunks,
             origin,
@@ -201,9 +229,7 @@ where
             ChunkingMethod::FastCdcV2020,
             config.max_chunks,
         )?;
-        logical_size = logical_size
-            .checked_add(u64::try_from(chunk.length).map_err(|_| PithosError::IntegerOverflow)?)
-            .ok_or(PithosError::IntegerOverflow)?;
+        logical_size = next_size;
     }
 
     validate_chunk_coverage(&chunks, origin, logical_size)?;
@@ -217,7 +243,21 @@ pub fn chunk_fixed_high_entropy(
     origin: ChunkOrigin,
     config: &ChunkingConfig,
 ) -> Result<Vec<LogicalChunkDraft>> {
+    chunk_fixed_high_entropy_with_checkpoint(logical_size, origin, config, || Ok(()))
+}
+
+/// Fixed high-entropy chunking with cooperative cancellation.
+pub fn chunk_fixed_high_entropy_with_checkpoint<F>(
+    logical_size: u64,
+    origin: ChunkOrigin,
+    config: &ChunkingConfig,
+    mut checkpoint: F,
+) -> Result<Vec<LogicalChunkDraft>>
+where
+    F: FnMut() -> Result<()>,
+{
     config.validate()?;
+    ensure_logical_size(logical_size, config)?;
     origin
         .base_offset
         .checked_add(logical_size)
@@ -241,6 +281,7 @@ pub fn chunk_fixed_high_entropy(
 
     let mut relative_offset = 0_u64;
     while relative_offset < logical_size {
+        checkpoint()?;
         let remaining = logical_size - relative_offset;
         let length = remaining.min(block_size);
         push_relative_chunk(
@@ -269,8 +310,24 @@ pub fn chunk_structural(
     boundary_ends: &[u64],
     config: &ChunkingConfig,
 ) -> Result<Vec<LogicalChunkDraft>> {
+    chunk_structural_with_checkpoint(data, origin, boundary_ends, config, || Ok(()))
+}
+
+/// In-memory structural chunking with cooperative cancellation at every region
+/// and FastCDC subchunk.
+pub fn chunk_structural_with_checkpoint<F>(
+    data: &[u8],
+    origin: ChunkOrigin,
+    boundary_ends: &[u64],
+    config: &ChunkingConfig,
+    mut checkpoint: F,
+) -> Result<Vec<LogicalChunkDraft>>
+where
+    F: FnMut() -> Result<()>,
+{
     config.validate()?;
     let logical_size = u64::try_from(data.len()).map_err(|_| PithosError::IntegerOverflow)?;
+    ensure_logical_size(logical_size, config)?;
     origin
         .base_offset
         .checked_add(logical_size)
@@ -283,10 +340,15 @@ pub fn chunk_structural(
         return Err(PithosError::InvalidMetadata("structural boundaries"));
     }
     validate_boundary_ends(boundary_ends, logical_size)?;
+    ensure_chunk_count(
+        u64::try_from(boundary_ends.len()).map_err(|_| PithosError::IntegerOverflow)?,
+        config.max_chunks,
+    )?;
 
     let mut chunks = Vec::new();
     let mut region_start = 0_u64;
     for &region_end in boundary_ends {
+        checkpoint()?;
         let region_len = region_end
             .checked_sub(region_start)
             .ok_or(PithosError::IntegerOverflow)?;
@@ -319,9 +381,15 @@ pub fn chunk_structural(
             };
             let sub_config = ChunkingConfig {
                 max_chunks: remaining_limit,
+                max_logical_bytes: region_len,
                 ..*config
             };
-            let mut subchunks = chunk_fastcdc(&data[start..end], sub_origin, &sub_config)?;
+            let mut subchunks = chunk_fastcdc_with_checkpoint(
+                &data[start..end],
+                sub_origin,
+                &sub_config,
+                &mut checkpoint,
+            )?;
             for chunk in &mut subchunks {
                 chunk.method = ChunkingMethod::Structural;
             }
@@ -337,6 +405,123 @@ pub fn chunk_structural(
     Ok(chunks)
 }
 
+/// Streaming structural chunking. Scanner boundaries define the expected
+/// logical size, so short and trailing input both fail closed.
+pub fn chunk_structural_reader<R: Read>(
+    reader: R,
+    origin: ChunkOrigin,
+    boundary_ends: &[u64],
+    config: &ChunkingConfig,
+) -> Result<Vec<LogicalChunkDraft>> {
+    chunk_structural_reader_with_checkpoint(reader, origin, boundary_ends, config, || Ok(()))
+}
+
+/// Streaming structural chunking with cooperative cancellation.
+pub fn chunk_structural_reader_with_checkpoint<R, F>(
+    mut reader: R,
+    origin: ChunkOrigin,
+    boundary_ends: &[u64],
+    config: &ChunkingConfig,
+    mut checkpoint: F,
+) -> Result<Vec<LogicalChunkDraft>>
+where
+    R: Read,
+    F: FnMut() -> Result<()>,
+{
+    config.validate()?;
+    let logical_size = boundary_ends.last().copied().unwrap_or(0);
+    ensure_logical_size(logical_size, config)?;
+    origin
+        .base_offset
+        .checked_add(logical_size)
+        .ok_or(PithosError::IntegerOverflow)?;
+
+    if logical_size == 0 {
+        if !boundary_ends.is_empty() {
+            return Err(PithosError::InvalidMetadata("structural boundaries"));
+        }
+        checkpoint()?;
+        let mut trailing = [0_u8; 1];
+        return match reader.read(&mut trailing)? {
+            0 => Ok(Vec::new()),
+            _ => Err(PithosError::InvalidMetadata("trailing structural data")),
+        };
+    }
+    validate_boundary_ends(boundary_ends, logical_size)?;
+    ensure_chunk_count(
+        u64::try_from(boundary_ends.len()).map_err(|_| PithosError::IntegerOverflow)?,
+        config.max_chunks,
+    )?;
+
+    let mut chunks = Vec::new();
+    let mut region_start = 0_u64;
+    for &region_end in boundary_ends {
+        checkpoint()?;
+        let region_len = region_end
+            .checked_sub(region_start)
+            .ok_or(PithosError::IntegerOverflow)?;
+        if region_len <= u64::from(config.fastcdc_max) {
+            consume_exact_region(&mut reader, region_len, &mut checkpoint)?;
+            push_relative_chunk(
+                &mut chunks,
+                origin,
+                region_start,
+                usize::try_from(region_len).map_err(|_| PithosError::IntegerOverflow)?,
+                ChunkingMethod::Structural,
+                config.max_chunks,
+            )?;
+        } else {
+            let remaining_limit = config
+                .max_chunks
+                .checked_sub(u64::try_from(chunks.len()).map_err(|_| PithosError::IntegerOverflow)?)
+                .ok_or(PithosError::IntegerOverflow)?;
+            if remaining_limit == 0 {
+                return Err(PithosError::ResourceLimit("chunk count"));
+            }
+            let sub_origin = ChunkOrigin {
+                entry_id: origin.entry_id,
+                object_id: origin.object_id,
+                base_offset: origin
+                    .base_offset
+                    .checked_add(region_start)
+                    .ok_or(PithosError::IntegerOverflow)?,
+            };
+            let sub_config = ChunkingConfig {
+                max_chunks: remaining_limit,
+                max_logical_bytes: region_len,
+                ..*config
+            };
+            let mut limited = (&mut reader).take(region_len);
+            let mut subchunks = chunk_fastcdc_reader_with_checkpoint(
+                &mut limited,
+                sub_origin,
+                &sub_config,
+                &mut checkpoint,
+            )?;
+            if limited.limit() != 0 {
+                return Err(PithosError::InvalidMetadata("short structural stream"));
+            }
+            validate_chunk_coverage(&subchunks, sub_origin, region_len)?;
+            for chunk in &mut subchunks {
+                chunk.method = ChunkingMethod::Structural;
+            }
+            chunks
+                .try_reserve(subchunks.len())
+                .map_err(|_| PithosError::MemoryLimit)?;
+            chunks.extend(subchunks);
+        }
+        region_start = region_end;
+    }
+
+    checkpoint()?;
+    let mut trailing = [0_u8; 1];
+    if reader.read(&mut trailing)? != 0 {
+        return Err(PithosError::InvalidMetadata("trailing structural data"));
+    }
+    validate_chunk_coverage(&chunks, origin, logical_size)?;
+    Ok(chunks)
+}
+
 /// Verifies exact, ordered coverage of one logical object.
 pub fn validate_chunk_coverage(
     chunks: &[LogicalChunkDraft],
@@ -348,7 +533,14 @@ pub fn validate_chunk_coverage(
         .checked_add(logical_size)
         .ok_or(PithosError::IntegerOverflow)?;
     if logical_size == 0 {
-        return if chunks.is_empty() {
+        return if chunks.is_empty()
+            || (chunks.len() == 1
+                && chunks[0].entry_id == origin.entry_id
+                && chunks[0].object_id == origin.object_id
+                && chunks[0].logical_offset == origin.base_offset
+                && chunks[0].length == 0
+                && chunks[0].method == ChunkingMethod::MicroFile)
+        {
             Ok(())
         } else {
             Err(PithosError::InvalidMetadata("empty chunk coverage"))
@@ -407,7 +599,7 @@ pub fn assign_chunk_ids(
         .try_reserve_exact(drafts.len())
         .map_err(|_| PithosError::MemoryLimit)?;
     for (index, draft) in drafts.into_iter().enumerate() {
-        if draft.length == 0 {
+        if draft.length == 0 && draft.method != ChunkingMethod::MicroFile {
             return Err(PithosError::InvalidMetadata("zero-length chunk"));
         }
         draft
@@ -483,4 +675,37 @@ fn ensure_chunk_count(count: u64, max_chunks: u64) -> Result<()> {
     } else {
         Ok(())
     }
+}
+
+fn ensure_logical_size(size: u64, config: &ChunkingConfig) -> Result<()> {
+    if size > config.max_logical_bytes {
+        Err(PithosError::ResourceLimit("logical bytes"))
+    } else {
+        Ok(())
+    }
+}
+
+fn consume_exact_region<R, F>(reader: &mut R, length: u64, checkpoint: &mut F) -> Result<()>
+where
+    R: Read,
+    F: FnMut() -> Result<()>,
+{
+    let mut remaining = length;
+    let mut buffer = [0_u8; 64 * 1024];
+    while remaining > 0 {
+        checkpoint()?;
+        let request = usize::try_from(remaining.min(buffer.len() as u64))
+            .map_err(|_| PithosError::IntegerOverflow)?;
+        match reader.read(&mut buffer[..request]) {
+            Ok(0) => return Err(PithosError::InvalidMetadata("short structural stream")),
+            Ok(read) => {
+                remaining = remaining
+                    .checked_sub(u64::try_from(read).map_err(|_| PithosError::IntegerOverflow)?)
+                    .ok_or(PithosError::IntegerOverflow)?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(PithosError::Io(error)),
+        }
+    }
+    Ok(())
 }

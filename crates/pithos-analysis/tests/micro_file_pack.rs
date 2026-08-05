@@ -333,11 +333,8 @@ fn compact_metadata_validation_rejects_corrupt_columns_and_offsets() {
 #[test]
 fn microfile_members_feed_global_logical_chunk_id_assignment() {
     let config = ChunkingConfig::default();
-    let plan = plan_micro_file_packs(
-        &[input(9, "z.bin", 0), input(3, "a.bin", 7)],
-        &config,
-    )
-    .unwrap();
+    let plan =
+        plan_micro_file_packs(&[input(9, "z.bin", 0), input(3, "a.bin", 7)], &config).unwrap();
     let drafts = micro_file_logical_chunks(&plan, 0, &config).unwrap();
     let assigned = pithos_analysis::assign_chunk_ids(drafts, config.max_chunks).unwrap();
 
@@ -363,8 +360,7 @@ fn public_validation_enforces_microfile_size_and_metadata_budgets() {
     oversized.packs[0].members[0].length = config.micro_file_max + 1;
     oversized.packs[0].metadata.records[0].length = config.micro_file_max + 1;
     oversized.packs[0].members[1].content_offset = u64::from(config.micro_file_max + 1);
-    oversized.packs[0].metadata.records[1].content_offset =
-        u64::from(config.micro_file_max + 1);
+    oversized.packs[0].metadata.records[1].content_offset = u64::from(config.micro_file_max + 1);
     oversized.packs[0].uncompressed_len =
         u64::from(config.micro_file_max + 1) + u64::from(oversized.packs[0].members[1].length);
     assert!(matches!(
@@ -399,11 +395,9 @@ fn microfile_planning_exposes_cooperative_cancellation() {
         .collect::<Vec<_>>();
 
     assert!(matches!(
-        plan_micro_file_packs_with_checkpoint(
-            &inputs,
-            &ChunkingConfig::default(),
-            || Err(PithosError::Cancelled),
-        ),
+        plan_micro_file_packs_with_checkpoint(&inputs, &ChunkingConfig::default(), || Err(
+            PithosError::Cancelled
+        ),),
         Err(PithosError::Cancelled)
     ));
 }

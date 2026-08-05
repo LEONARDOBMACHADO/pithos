@@ -65,7 +65,18 @@ impl MicroFilePackMetadata {
     /// Reconstructs and validates all front-coded paths and parallel metadata
     /// columns. Malformed metadata fails closed without indexing unchecked data.
     pub fn expanded_paths(&self) -> Result<Vec<Vec<u8>>> {
+        self.expanded_paths_with_config(&ChunkingConfig::default())
+    }
+
+    /// Bounded variant used when the caller supplies stricter archive limits.
+    pub fn expanded_paths_with_config(&self, config: &ChunkingConfig) -> Result<Vec<Vec<u8>>> {
+        config.validate()?;
         let record_count = self.records.len();
+        let record_count_u64 =
+            u64::try_from(record_count).map_err(|_| PithosError::IntegerOverflow)?;
+        if record_count_u64 > config.max_chunks {
+            return Err(PithosError::ResourceLimit("chunk count"));
+        }
         if self.paths.len() != record_count || self.modified_ns_deltas.len() != record_count {
             return Err(PithosError::InvalidMetadata("microfile metadata columns"));
         }
@@ -76,9 +87,30 @@ impl MicroFilePackMetadata {
             .mode_dictionary
             .windows(2)
             .any(|pair| pair[0] >= pair[1])
+            || self.mode_dictionary.len() > record_count
         {
             return Err(PithosError::InvalidMetadata("microfile mode dictionary"));
         }
+
+        let suffix_bytes = self.paths.iter().try_fold(0_u64, |total, path| {
+            total
+                .checked_add(
+                    u64::try_from(path.suffix.len()).map_err(|_| PithosError::IntegerOverflow)?,
+                )
+                .ok_or(PithosError::IntegerOverflow)
+        })?;
+        let column_bytes = record_count_u64
+            .checked_mul(72)
+            .and_then(|value| value.checked_add(suffix_bytes))
+            .and_then(|value| {
+                value.checked_add(
+                    u64::try_from(self.mode_dictionary.len())
+                        .ok()?
+                        .checked_mul(4)?,
+                )
+            })
+            .ok_or(PithosError::IntegerOverflow)?;
+        ensure_metadata_size(column_bytes, config)?;
 
         let mut paths = Vec::new();
         try_reserve_exact(&mut paths, record_count)?;
@@ -86,6 +118,7 @@ impl MicroFilePackMetadata {
         let mut entry_ids = Vec::new();
         try_reserve_exact(&mut entry_ids, record_count)?;
         let mut expected_offset = 0_u64;
+        let mut expanded_path_bytes = 0_u64;
 
         for ((path, delta), record) in self
             .paths
@@ -101,6 +134,19 @@ impl MicroFilePackMetadata {
             let path_len = prefix
                 .checked_add(path.suffix.len())
                 .ok_or(PithosError::IntegerOverflow)?;
+            let path_len_u64 = u64::try_from(path_len).map_err(|_| PithosError::IntegerOverflow)?;
+            if path_len_u64 > config.max_path_bytes {
+                return Err(PithosError::ResourceLimit("path bytes"));
+            }
+            expanded_path_bytes = expanded_path_bytes
+                .checked_add(path_len_u64)
+                .ok_or(PithosError::IntegerOverflow)?;
+            ensure_metadata_size(
+                column_bytes
+                    .checked_add(expanded_path_bytes)
+                    .ok_or(PithosError::IntegerOverflow)?,
+                config,
+            )?;
             let mut expanded = Vec::new();
             expanded
                 .try_reserve_exact(path_len)
@@ -123,13 +169,24 @@ impl MicroFilePackMetadata {
                 .checked_add(u64::from(record.length))
                 .ok_or(PithosError::IntegerOverflow)?;
             entry_ids.push(record.entry_id);
-            previous = expanded.clone();
+            previous.clear();
+            previous
+                .try_reserve_exact(expanded.len())
+                .map_err(|_| PithosError::MemoryLimit)?;
+            previous.extend_from_slice(&expanded);
             paths.push(expanded);
         }
 
         entry_ids.sort_unstable();
         if entry_ids.windows(2).any(|pair| pair[0] == pair[1]) {
             return Err(PithosError::InvalidMetadata("duplicate microfile entry id"));
+        }
+        let mut ordered_paths = Vec::new();
+        try_reserve_exact(&mut ordered_paths, paths.len())?;
+        ordered_paths.extend(paths.iter().map(Vec::as_slice));
+        ordered_paths.sort_unstable();
+        if ordered_paths.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(PithosError::InvalidMetadata("duplicate microfile path"));
         }
         Ok(paths)
     }
@@ -154,13 +211,19 @@ impl MicroFilePack {
     /// Validates member coverage and its compact metadata representation.
     pub fn validate(&self, config: &ChunkingConfig) -> Result<()> {
         config.validate()?;
+        let member_count =
+            u64::try_from(self.members.len()).map_err(|_| PithosError::IntegerOverflow)?;
+        if member_count > config.max_chunks {
+            return Err(PithosError::ResourceLimit("chunk count"));
+        }
         if self.members.is_empty()
             || self.members.len() != self.metadata.records.len()
             || self.uncompressed_len > u64::from(config.micro_pack_target)
+            || self.uncompressed_len > config.max_logical_bytes
         {
             return Err(PithosError::InvalidMetadata("microfile pack layout"));
         }
-        self.metadata.expanded_paths()?;
+        self.metadata.expanded_paths_with_config(config)?;
 
         let mut expected_offset = 0_u64;
         for (member, record) in self.members.iter().zip(&self.metadata.records) {
@@ -168,6 +231,7 @@ impl MicroFilePack {
                 || member.content_offset != record.content_offset
                 || member.length != record.length
                 || member.content_offset != expected_offset
+                || member.length > config.micro_file_max
             {
                 return Err(PithosError::InvalidMetadata("microfile member mapping"));
             }
@@ -208,6 +272,14 @@ impl MicroFilePackPlan {
         if total_members > config.max_chunks {
             return Err(PithosError::ResourceLimit("chunk count"));
         }
+        let total_content = self.packs.iter().try_fold(0_u64, |total, pack| {
+            total
+                .checked_add(pack.uncompressed_len)
+                .ok_or(PithosError::IntegerOverflow)
+        })?;
+        if total_content > config.max_logical_bytes {
+            return Err(PithosError::ResourceLimit("logical bytes"));
+        }
 
         let total_ids_u64 = total_members
             .checked_add(
@@ -236,6 +308,36 @@ impl MicroFilePackPlan {
     }
 }
 
+/// Converts every eligible MicroFilePack member into one logical chunk draft.
+/// The caller then combines these drafts with other objects and invokes
+/// [`crate::assign_chunk_ids`] for global deterministic IDs.
+pub fn micro_file_logical_chunks(
+    plan: &MicroFilePackPlan,
+    object_id: u64,
+    config: &ChunkingConfig,
+) -> Result<Vec<crate::LogicalChunkDraft>> {
+    plan.validate(config)?;
+    let member_count = plan.packs.iter().try_fold(0_usize, |total, pack| {
+        total
+            .checked_add(pack.members.len())
+            .ok_or(PithosError::IntegerOverflow)
+    })?;
+    let mut drafts = Vec::new();
+    try_reserve_exact(&mut drafts, member_count)?;
+    for pack in &plan.packs {
+        for member in &pack.members {
+            drafts.push(crate::LogicalChunkDraft {
+                entry_id: member.entry_id,
+                object_id,
+                logical_offset: 0,
+                length: member.length,
+                method: crate::ChunkingMethod::MicroFile,
+            });
+        }
+    }
+    Ok(drafts)
+}
+
 /// Produces a canonical metadata plan for microfile payload aggregation.
 ///
 /// Grouping signals determine proximity only. A pack boundary is introduced
@@ -244,24 +346,41 @@ pub fn plan_micro_file_packs(
     inputs: &[MicroFileInput],
     config: &ChunkingConfig,
 ) -> Result<MicroFilePackPlan> {
+    plan_micro_file_packs_with_checkpoint(inputs, config, || Ok(()))
+}
+
+/// MicroFilePack planning with cooperative checkpoints around sorting and in
+/// every linear construction pass.
+pub fn plan_micro_file_packs_with_checkpoint<F>(
+    inputs: &[MicroFileInput],
+    config: &ChunkingConfig,
+    mut checkpoint: F,
+) -> Result<MicroFilePackPlan>
+where
+    F: FnMut() -> Result<()>,
+{
     config.validate()?;
+    checkpoint()?;
     let input_count = u64::try_from(inputs.len()).map_err(|_| PithosError::IntegerOverflow)?;
     if input_count > config.max_chunks {
         return Err(PithosError::ResourceLimit("chunk count"));
     }
-    validate_unique_inputs(inputs)?;
+    validate_unique_inputs(inputs, config)?;
 
     let mut ordered = Vec::new();
     try_reserve_exact(&mut ordered, inputs.len())?;
     ordered.extend(inputs);
     ordered.sort_unstable_by(|left, right| canonical_key(left).cmp(&canonical_key(right)));
+    checkpoint()?;
 
     let mut eligible = Vec::new();
     try_reserve_exact(&mut eligible, inputs.len())?;
     let mut excluded = Vec::new();
     try_reserve_exact(&mut excluded, inputs.len())?;
 
+    let mut eligible_bytes = 0_u64;
     for candidate in ordered {
+        checkpoint()?;
         let reason = if candidate.requires_isolated_access {
             Some(MicroFileExclusionReason::RequiresIsolatedAccess)
         } else if candidate.size > u64::from(config.micro_file_max) {
@@ -276,12 +395,18 @@ pub fn plan_micro_file_packs(
                 reason,
             });
         } else {
+            eligible_bytes = eligible_bytes
+                .checked_add(candidate.size)
+                .ok_or(PithosError::IntegerOverflow)?;
+            if eligible_bytes > config.max_logical_bytes {
+                return Err(PithosError::ResourceLimit("logical bytes"));
+            }
             eligible.push(candidate);
         }
     }
 
     let target = u64::from(config.micro_pack_target);
-    let required_packs = required_pack_count(&eligible, target)?;
+    let required_packs = required_pack_count(&eligible, target, &mut checkpoint)?;
     let required_packs_u64 =
         u64::try_from(required_packs).map_err(|_| PithosError::IntegerOverflow)?;
     if required_packs_u64 > config.max_chunks {
@@ -294,6 +419,7 @@ pub fn plan_micro_file_packs(
     let mut pack_len = 0_u64;
 
     for (index, candidate) in eligible.iter().enumerate() {
+        checkpoint()?;
         let next_len = pack_len
             .checked_add(candidate.size)
             .ok_or(PithosError::IntegerOverflow)?;
@@ -303,7 +429,8 @@ pub fn plan_micro_file_packs(
                 &mut packs,
                 &eligible[pack_start..index],
                 pack_len,
-                config.max_chunks,
+                config,
+                &mut checkpoint,
             )?;
             pack_start = index;
             pack_len = candidate.size;
@@ -317,21 +444,31 @@ pub fn plan_micro_file_packs(
             &mut packs,
             &eligible[pack_start..],
             pack_len,
-            config.max_chunks,
+            config,
+            &mut checkpoint,
         )?;
     }
 
     let plan = MicroFilePackPlan { packs, excluded };
+    checkpoint()?;
     plan.validate(config)?;
     Ok(plan)
 }
 
-fn required_pack_count(inputs: &[&MicroFileInput], target: u64) -> Result<usize> {
+fn required_pack_count<F>(
+    inputs: &[&MicroFileInput],
+    target: u64,
+    checkpoint: &mut F,
+) -> Result<usize>
+where
+    F: FnMut() -> Result<()>,
+{
     let mut count = 0_usize;
     let mut current_len = 0_u64;
     let mut has_members = false;
 
     for input in inputs {
+        checkpoint()?;
         let next_len = current_len
             .checked_add(input.size)
             .ok_or(PithosError::IntegerOverflow)?;
@@ -364,10 +501,34 @@ fn canonical_key(input: &MicroFileInput) -> CanonicalKey<'_> {
     )
 }
 
-fn validate_unique_inputs(inputs: &[MicroFileInput]) -> Result<()> {
+fn validate_unique_inputs(inputs: &[MicroFileInput], config: &ChunkingConfig) -> Result<()> {
     if inputs.iter().any(|input| input.path.is_empty()) {
         return Err(PithosError::InvalidMetadata("empty microfile path"));
     }
+    let mut path_bytes = 0_u64;
+    for input in inputs {
+        let path_len = u64::try_from(input.path.len()).map_err(|_| PithosError::IntegerOverflow)?;
+        let prefix_len =
+            u64::try_from(input.path_prefix_key.len()).map_err(|_| PithosError::IntegerOverflow)?;
+        let extension_len =
+            u64::try_from(input.extension_key.len()).map_err(|_| PithosError::IntegerOverflow)?;
+        if path_len > config.max_path_bytes
+            || prefix_len > config.max_path_bytes
+            || extension_len > config.max_path_bytes
+        {
+            return Err(PithosError::ResourceLimit("path bytes"));
+        }
+        path_bytes = path_bytes
+            .checked_add(path_len)
+            .ok_or(PithosError::IntegerOverflow)?;
+    }
+    let input_count = u64::try_from(inputs.len()).map_err(|_| PithosError::IntegerOverflow)?;
+    let metadata_upper_bound = input_count
+        .checked_mul(76)
+        .and_then(|value| value.checked_add(path_bytes))
+        .ok_or(PithosError::IntegerOverflow)?;
+    ensure_metadata_size(metadata_upper_bound, config)?;
+
     let mut entry_ids = Vec::new();
     try_reserve_exact(&mut entry_ids, inputs.len())?;
     entry_ids.extend(inputs.iter().map(|input| input.entry_id));
@@ -386,19 +547,24 @@ fn validate_unique_inputs(inputs: &[MicroFileInput]) -> Result<()> {
     Ok(())
 }
 
-fn push_pack(
+fn push_pack<F>(
     packs: &mut Vec<MicroFilePack>,
     inputs: &[&MicroFileInput],
     expected_len: u64,
-    max_chunks: u64,
-) -> Result<()> {
+    config: &ChunkingConfig,
+    checkpoint: &mut F,
+) -> Result<()>
+where
+    F: FnMut() -> Result<()>,
+{
+    checkpoint()?;
     let pack_id = u64::try_from(packs.len()).map_err(|_| PithosError::IntegerOverflow)?;
     let next_count = pack_id.checked_add(1).ok_or(PithosError::IntegerOverflow)?;
-    if next_count > max_chunks {
+    if next_count > config.max_chunks {
         return Err(PithosError::ResourceLimit("chunk count"));
     }
 
-    let pack = build_pack(pack_id, inputs)?;
+    let pack = build_pack(pack_id, inputs, checkpoint)?;
     if pack.uncompressed_len != expected_len {
         return Err(PithosError::InvalidMetadata("microfile pack length"));
     }
@@ -406,7 +572,15 @@ fn push_pack(
     Ok(())
 }
 
-fn build_pack(pack_id: u64, inputs: &[&MicroFileInput]) -> Result<MicroFilePack> {
+fn build_pack<F>(
+    pack_id: u64,
+    inputs: &[&MicroFileInput],
+    checkpoint: &mut F,
+) -> Result<MicroFilePack>
+where
+    F: FnMut() -> Result<()>,
+{
+    checkpoint()?;
     let base_modified_ns = inputs
         .iter()
         .map(|input| input.modified_ns)
@@ -431,6 +605,7 @@ fn build_pack(pack_id: u64, inputs: &[&MicroFileInput]) -> Result<MicroFilePack>
     let mut content_offset = 0_u64;
     let mut previous_path: &[u8] = &[];
     for input in inputs {
+        checkpoint()?;
         let length = u32::try_from(input.size).map_err(|_| PithosError::IntegerOverflow)?;
         let shared_prefix_len = common_prefix_len(previous_path, &input.path);
         let shared_prefix_len =
@@ -498,4 +673,12 @@ fn try_reserve_exact<T>(items: &mut Vec<T>, additional: usize) -> Result<()> {
     items
         .try_reserve_exact(additional)
         .map_err(|_| PithosError::MemoryLimit)
+}
+
+fn ensure_metadata_size(size: u64, config: &ChunkingConfig) -> Result<()> {
+    if size > config.max_metadata_bytes {
+        Err(PithosError::ResourceLimit("metadata bytes"))
+    } else {
+        Ok(())
+    }
 }
