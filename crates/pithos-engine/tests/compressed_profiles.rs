@@ -149,5 +149,8 @@ fn compressed_profiles_preserve_empty_files() {
         output_dir: restored.clone(),
     })
     .unwrap();
-    assert_eq!(fs::read(restored.join("empty.bin")).unwrap(), Vec::<u8>::new());
+    assert_eq!(
+        fs::read(restored.join("empty.bin")).unwrap(),
+        Vec::<u8>::new()
+    );
 }

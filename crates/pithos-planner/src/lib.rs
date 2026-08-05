@@ -39,9 +39,7 @@ pub fn plan_solid_groups(
         return Ok(lengths
             .iter()
             .enumerate()
-            .filter_map(|(index, length)| {
-                (*length != 0).then_some(SolidGroupPlan::new(index, 1, *length))
-            })
+            .map(|(index, length)| SolidGroupPlan::new(index, 1, *length))
             .collect());
     }
 
@@ -49,9 +47,6 @@ pub fn plan_solid_groups(
     let mut groups = Vec::new();
     let mut current: Option<SolidGroupPlan> = None;
     for (index, length) in lengths.iter().copied().enumerate() {
-        if length == 0 {
-            continue;
-        }
         if let Some(mut group) = current.take() {
             let combined = group
                 .uncompressed_len
