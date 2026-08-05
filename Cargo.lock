@@ -488,6 +488,7 @@ dependencies = [
  "blake3",
  "crc32c",
  "pithos-core",
+ "proptest",
  "xxhash-rust",
 ]
 
