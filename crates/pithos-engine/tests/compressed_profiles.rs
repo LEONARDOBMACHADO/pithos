@@ -130,3 +130,24 @@ fn compressed_output_is_byte_deterministic() {
     }
     assert_eq!(fs::read(first).unwrap(), fs::read(second).unwrap());
 }
+
+#[test]
+fn compressed_profiles_preserve_empty_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let input = temp.path().join("empty.bin");
+    fs::write(&input, []).unwrap();
+    let archive = temp.path().join("empty.pithos");
+    pack(PackRequest {
+        inputs: vec![input],
+        output: archive.clone(),
+        profile: CompressionProfile::Balanced,
+    })
+    .unwrap();
+    let restored = temp.path().join("empty-restored");
+    unpack(UnpackRequest {
+        archive,
+        output_dir: restored.clone(),
+    })
+    .unwrap();
+    assert_eq!(fs::read(restored.join("empty.bin")).unwrap(), Vec::<u8>::new());
+}

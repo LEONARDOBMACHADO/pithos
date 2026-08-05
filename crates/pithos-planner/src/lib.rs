@@ -137,11 +137,23 @@ mod tests {
     }
 
     #[test]
-    fn raw_profile_keeps_every_nonempty_item_independent() {
+    fn raw_profile_keeps_every_item_independent_including_empty_files() {
         let groups = plan_solid_groups(CompressionProfile::Raw, &[3, 0, 5]).unwrap();
         assert_eq!(
             groups,
-            vec![SolidGroupPlan::new(0, 1, 3), SolidGroupPlan::new(2, 1, 5)]
+            vec![
+                SolidGroupPlan::new(0, 1, 3),
+                SolidGroupPlan::new(1, 1, 0),
+                SolidGroupPlan::new(2, 1, 5),
+            ]
+        );
+    }
+
+    #[test]
+    fn solid_groups_keep_empty_items_in_their_logical_position() {
+        assert_eq!(
+            plan_solid_groups(CompressionProfile::Stream, &[3, 0, 5]).unwrap(),
+            vec![SolidGroupPlan::new(0, 3, 8)]
         );
     }
 
