@@ -1,5 +1,6 @@
 use pithos_codecs::{BrotliCodec, Codec, CodecConfig, CodecId, Lzma2Codec, StoreCodec, ZstdCodec};
-use pithos_core::CompressionProfile;
+use pithos_core::{CompressionProfile, PithosError};
+use pithos_engine::{CancellationToken, PackLimits, pack_with_limits_and_control};
 use pithos_engine::{PackRequest, UnpackRequest, pack, unpack, verify};
 use pithos_format::{
     CodecRegistry, GlobalHeader, GroupTableRecord, HEADER_LEN, SECTION_ENTRY_LEN,
@@ -182,4 +183,31 @@ fn compressed_profiles_preserve_empty_files() {
         fs::read(restored.join("empty.bin")).unwrap(),
         Vec::<u8>::new()
     );
+}
+
+#[test]
+fn compressed_pack_honors_memory_budget_independently_from_temp_budget() {
+    let temp = tempfile::tempdir().unwrap();
+    let input = temp.path().join("payload.txt");
+    fs::write(&input, "bounded-memory-payload".repeat(256)).unwrap();
+    let archive = temp.path().join("memory-limited.pithos");
+    let limits = PackLimits {
+        max_memory_bytes: 1024 * 1024,
+        max_temp_bytes: u64::MAX,
+        ..PackLimits::default()
+    };
+
+    let error = pack_with_limits_and_control(
+        PackRequest {
+            inputs: vec![input],
+            output: archive.clone(),
+            profile: CompressionProfile::Balanced,
+        },
+        &limits,
+        &CancellationToken::new(),
+    )
+    .expect_err("the codec task must not exceed its explicit memory budget");
+
+    assert!(matches!(error, PithosError::MemoryLimit));
+    assert!(!archive.exists());
 }
