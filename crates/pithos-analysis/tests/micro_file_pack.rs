@@ -1,6 +1,6 @@
 use pithos_analysis::{
     ChunkingConfig, MicroFileExclusionReason, MicroFileInput, MicroFilePackPlan,
-    plan_micro_file_packs,
+    micro_file_logical_chunks, plan_micro_file_packs, plan_micro_file_packs_with_checkpoint,
 };
 use pithos_core::PithosError;
 
@@ -327,5 +327,83 @@ fn compact_metadata_validation_rejects_corrupt_columns_and_offsets() {
     assert!(matches!(
         timestamp_overflow.validate(&config),
         Err(PithosError::IntegerOverflow)
+    ));
+}
+
+#[test]
+fn microfile_members_feed_global_logical_chunk_id_assignment() {
+    let config = ChunkingConfig::default();
+    let plan = plan_micro_file_packs(
+        &[input(9, "z.bin", 0), input(3, "a.bin", 7)],
+        &config,
+    )
+    .unwrap();
+    let drafts = micro_file_logical_chunks(&plan, 0, &config).unwrap();
+    let assigned = pithos_analysis::assign_chunk_ids(drafts, config.max_chunks).unwrap();
+
+    assert_eq!(
+        assigned
+            .iter()
+            .map(|chunk| (chunk.chunk_id, chunk.entry_id, chunk.length, chunk.method))
+            .collect::<Vec<_>>(),
+        [
+            (0, 3, 7, pithos_analysis::ChunkingMethod::MicroFile),
+            (1, 9, 0, pithos_analysis::ChunkingMethod::MicroFile),
+        ]
+    );
+}
+
+#[test]
+fn public_validation_enforces_microfile_size_and_metadata_budgets() {
+    let inputs = [input(1, "root/a.bin", 3), input(2, "root/b.bin", 5)];
+    let config = ChunkingConfig::default();
+    let plan = plan_micro_file_packs(&inputs, &config).unwrap();
+
+    let mut oversized = plan.clone();
+    oversized.packs[0].members[0].length = config.micro_file_max + 1;
+    oversized.packs[0].metadata.records[0].length = config.micro_file_max + 1;
+    oversized.packs[0].members[1].content_offset = u64::from(config.micro_file_max + 1);
+    oversized.packs[0].metadata.records[1].content_offset =
+        u64::from(config.micro_file_max + 1);
+    oversized.packs[0].uncompressed_len =
+        u64::from(config.micro_file_max + 1) + u64::from(oversized.packs[0].members[1].length);
+    assert!(matches!(
+        oversized.validate(&config),
+        Err(PithosError::InvalidMetadata(_)) | Err(PithosError::ResourceLimit(_))
+    ));
+
+    let mut duplicate_path = plan.clone();
+    let first_path_len = duplicate_path.packs[0].metadata.paths[0].suffix.len();
+    duplicate_path.packs[0].metadata.paths[1].shared_prefix_len =
+        u32::try_from(first_path_len).unwrap();
+    duplicate_path.packs[0].metadata.paths[1].suffix.clear();
+    assert!(matches!(
+        duplicate_path.validate(&config),
+        Err(PithosError::InvalidMetadata(_))
+    ));
+
+    let tiny_metadata_budget = ChunkingConfig {
+        max_metadata_bytes: 1,
+        ..config
+    };
+    assert!(matches!(
+        plan.validate(&tiny_metadata_budget),
+        Err(PithosError::ResourceLimit(_))
+    ));
+}
+
+#[test]
+fn microfile_planning_exposes_cooperative_cancellation() {
+    let inputs = (0..32)
+        .map(|entry_id| input(entry_id, &format!("root/{entry_id}.bin"), 1))
+        .collect::<Vec<_>>();
+
+    assert!(matches!(
+        plan_micro_file_packs_with_checkpoint(
+            &inputs,
+            &ChunkingConfig::default(),
+            || Err(PithosError::Cancelled),
+        ),
+        Err(PithosError::Cancelled)
     ));
 }

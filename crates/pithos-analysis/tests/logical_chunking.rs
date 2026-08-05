@@ -3,7 +3,9 @@ use std::io::{self, Cursor, Read};
 use pithos_analysis::{
     ChunkOrigin, ChunkingConfig, ChunkingMethod, LogicalChunkDraft, assign_chunk_ids,
     chunk_fastcdc, chunk_fastcdc_reader, chunk_fastcdc_reader_with_checkpoint,
-    chunk_fixed_high_entropy, chunk_structural, validate_chunk_coverage,
+    chunk_fastcdc_with_checkpoint, chunk_fixed_high_entropy,
+    chunk_fixed_high_entropy_with_checkpoint, chunk_structural, chunk_structural_reader,
+    chunk_structural_reader_with_checkpoint, validate_chunk_coverage,
 };
 use pithos_core::{DecodeLimits, PithosError};
 use proptest::prelude::*;
@@ -74,6 +76,18 @@ fn default_config_is_normative_and_valid() {
     assert_eq!(config.micro_file_max, 64 * KIB);
     assert_eq!(config.micro_pack_target, 4 * MIB);
     assert_eq!(config.max_chunks, DecodeLimits::default().max_chunks);
+    assert_eq!(
+        config.max_logical_bytes,
+        DecodeLimits::default().max_original_bytes
+    );
+    assert_eq!(
+        config.max_metadata_bytes,
+        DecodeLimits::default().max_metadata_bytes
+    );
+    assert_eq!(
+        config.max_path_bytes,
+        DecodeLimits::default().max_path_bytes
+    );
     config.validate().unwrap();
 }
 
@@ -116,6 +130,18 @@ fn config_rejects_invalid_size_relations_and_resource_limits() {
         },
         ChunkingConfig {
             max_chunks: 0,
+            ..ChunkingConfig::default()
+        },
+        ChunkingConfig {
+            max_logical_bytes: 0,
+            ..ChunkingConfig::default()
+        },
+        ChunkingConfig {
+            max_metadata_bytes: 0,
+            ..ChunkingConfig::default()
+        },
+        ChunkingConfig {
+            max_path_bytes: 0,
             ..ChunkingConfig::default()
         },
     ];
@@ -323,6 +349,63 @@ fn streaming_fastcdc_observes_cancellation_checkpoint() {
 }
 
 #[test]
+fn every_chunking_path_enforces_the_configured_logical_byte_limit() {
+    let origin = ChunkOrigin {
+        entry_id: 1,
+        object_id: 1,
+        base_offset: 0,
+    };
+    let config = ChunkingConfig {
+        max_logical_bytes: 7,
+        ..ChunkingConfig::default()
+    };
+    let data = [0_u8; 8];
+
+    assert!(matches!(
+        chunk_fastcdc(&data, origin, &config),
+        Err(PithosError::ResourceLimit(_))
+    ));
+    assert!(matches!(
+        chunk_fastcdc_reader(Cursor::new(data), origin, &config),
+        Err(PithosError::ResourceLimit(_))
+    ));
+    assert!(matches!(
+        chunk_fixed_high_entropy(8, origin, &config),
+        Err(PithosError::ResourceLimit(_))
+    ));
+    assert!(matches!(
+        chunk_structural(&data, origin, &[8], &config),
+        Err(PithosError::ResourceLimit(_))
+    ));
+}
+
+#[test]
+fn in_memory_and_fixed_paths_expose_cooperative_cancellation() {
+    let origin = ChunkOrigin {
+        entry_id: 1,
+        object_id: 1,
+        base_offset: 0,
+    };
+    let data = deterministic_bytes(2 * MIB as usize);
+
+    assert!(matches!(
+        chunk_fastcdc_with_checkpoint(&data, origin, &ChunkingConfig::default(), || Err(
+            PithosError::Cancelled
+        )),
+        Err(PithosError::Cancelled)
+    ));
+    assert!(matches!(
+        chunk_fixed_high_entropy_with_checkpoint(
+            u64::from(2 * MIB),
+            origin,
+            &ChunkingConfig::default(),
+            || Err(PithosError::Cancelled),
+        ),
+        Err(PithosError::Cancelled)
+    ));
+}
+
+#[test]
 fn fastcdc_and_fixed_chunking_return_no_chunks_for_empty_inputs() {
     let origin = ChunkOrigin {
         entry_id: 1,
@@ -453,6 +536,67 @@ fn structural_chunking_rejects_noncanonical_or_incomplete_boundaries() {
             Err(PithosError::InvalidMetadata(_))
         ));
     }
+}
+
+#[test]
+fn structural_streaming_matches_slice_and_rejects_short_or_trailing_data() {
+    let data = deterministic_bytes(3 * MIB as usize + 101);
+    let boundaries = [128 * KIB as u64, 2 * MIB as u64, data.len() as u64];
+    let origin = ChunkOrigin {
+        entry_id: 13,
+        object_id: 21,
+        base_offset: 34,
+    };
+    let config = ChunkingConfig::default();
+    let expected = chunk_structural(&data, origin, &boundaries, &config).unwrap();
+
+    assert_eq!(
+        chunk_structural_reader(Cursor::new(&data), origin, &boundaries, &config).unwrap(),
+        expected
+    );
+    assert!(matches!(
+        chunk_structural_reader(
+            Cursor::new(&data[..data.len() - 1]),
+            origin,
+            &boundaries,
+            &config,
+        ),
+        Err(PithosError::InvalidMetadata(_)) | Err(PithosError::Io(_))
+    ));
+    let mut trailing = data.clone();
+    trailing.push(0);
+    assert!(matches!(
+        chunk_structural_reader(Cursor::new(trailing), origin, &boundaries, &config),
+        Err(PithosError::InvalidMetadata(_))
+    ));
+    assert!(matches!(
+        chunk_structural_reader_with_checkpoint(
+            Cursor::new(data),
+            origin,
+            &boundaries,
+            &config,
+            || Err(PithosError::Cancelled),
+        ),
+        Err(PithosError::Cancelled)
+    ));
+}
+
+#[test]
+fn empty_microfile_draft_receives_a_stable_global_chunk_id() {
+    let assigned = assign_chunk_ids(
+        vec![LogicalChunkDraft {
+            entry_id: 9,
+            object_id: 0,
+            logical_offset: 0,
+            length: 0,
+            method: ChunkingMethod::MicroFile,
+        }],
+        1,
+    )
+    .unwrap();
+
+    assert_eq!(assigned[0].chunk_id, 0);
+    assert_eq!(assigned[0].length, 0);
 }
 
 #[test]
