@@ -109,6 +109,42 @@ mod tests {
     }
 
     #[test]
+    fn every_phase_two_profile_is_accepted_with_stable_cli_spelling() {
+        for (spelling, expected) in [
+            ("raw", CliProfile::Raw),
+            ("stream", CliProfile::Stream),
+            ("random", CliProfile::Random),
+            ("balanced", CliProfile::Balanced),
+            ("archive-max", CliProfile::ArchiveMax),
+        ] {
+            let cli = Cli::try_parse_from([
+                "pithos",
+                "pack",
+                "input",
+                "-o",
+                "archive.pithos",
+                "--profile",
+                spelling,
+            ])
+            .unwrap();
+            assert!(matches!(
+                cli.command,
+                Commands::Pack { profile, .. } if profile == expected
+            ));
+        }
+        assert!(Cli::try_parse_from([
+            "pithos",
+            "pack",
+            "input",
+            "-o",
+            "archive.pithos",
+            "--profile",
+            "unknown",
+        ])
+        .is_err());
+    }
+
+    #[test]
     fn output_format_is_global_and_extract_requires_one_destination() {
         let cli = Cli::try_parse_from([
             "pithos",

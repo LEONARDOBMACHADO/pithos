@@ -113,6 +113,14 @@ async fn daemon_mode_runs_the_complete_cli_archive_workflow_over_local_ipc() {
     assert_success(&capabilities);
     let capabilities: Value = serde_json::from_slice(&capabilities.stdout).unwrap();
     assert_eq!(capabilities["protocol_version"], 1);
+    assert_eq!(
+        capabilities["supported_profiles"],
+        serde_json::json!(["raw", "stream", "random", "balanced", "archive-max"])
+    );
+    assert_eq!(
+        capabilities["supported_codecs"],
+        serde_json::json!(["STORE", "Zstandard", "Brotli", "LZMA2"])
+    );
     assert!(
         capabilities["supported_methods"]
             .as_array()
@@ -134,6 +142,8 @@ async fn daemon_mode_runs_the_complete_cli_archive_workflow_over_local_ipc() {
         &source,
         "--output",
         &archive,
+        "--profile",
+        "balanced",
     ])
     .await;
     assert_success(&packed);
@@ -392,6 +402,10 @@ async fn standalone_remains_the_default_without_a_daemon() {
     assert_success(&capabilities);
     let result: Value = serde_json::from_slice(&capabilities.stdout).unwrap();
     assert_eq!(result["codecs"][0], "STORE");
+    assert_eq!(
+        result["codecs"],
+        serde_json::json!(["STORE", "Zstandard", "Brotli", "LZMA2"])
+    );
 
     let packed = invoke(&[
         "--output-format",
@@ -400,6 +414,8 @@ async fn standalone_remains_the_default_without_a_daemon() {
         &source,
         "--output",
         &archive,
+        "--profile",
+        "archive-max",
     ])
     .await;
     assert_success(&packed);

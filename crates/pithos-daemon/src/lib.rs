@@ -654,6 +654,14 @@ mod tests {
             .unwrap();
         assert_eq!(response["id"], "hello");
         assert_eq!(response["result"]["protocol_version"], 1);
+        assert_eq!(
+            response["result"]["supported_profiles"],
+            serde_json::json!(["raw", "stream", "random", "balanced", "archive-max"])
+        );
+        assert_eq!(
+            response["result"]["supported_codecs"],
+            serde_json::json!(["STORE", "Zstandard", "Brotli", "LZMA2"])
+        );
 
         #[cfg(unix)]
         {
@@ -700,7 +708,7 @@ mod tests {
                 "capability_token": token,
                 "inputs": [source],
                 "path_scope": {"read_roots": [temp.path()], "write_roots": [temp.path()]},
-                "profile": "raw"
+                "profile": "balanced"
             }),
         )
         .await;
@@ -715,7 +723,7 @@ mod tests {
                 "context": job_context(&token, "workflow-pack", temp.path()),
                 "inputs": [source],
                 "output": archive,
-                "profile": "raw"
+                "profile": "balanced"
             }),
         )
         .await;

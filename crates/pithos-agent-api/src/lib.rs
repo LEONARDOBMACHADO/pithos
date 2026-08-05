@@ -747,6 +747,33 @@ mod tests {
     }
 
     #[test]
+    fn compression_profile_contract_is_complete_strict_and_backward_compatible() {
+        let cases = [
+            (ApiProfile::Raw, "raw"),
+            (ApiProfile::Stream, "stream"),
+            (ApiProfile::Random, "random"),
+            (ApiProfile::Balanced, "balanced"),
+            (ApiProfile::ArchiveMax, "archive_max"),
+        ];
+        for (profile, expected) in cases {
+            assert_eq!(serde_json::to_value(profile).unwrap(), expected);
+            assert_eq!(
+                serde_json::from_value::<ApiProfile>(json!(expected)).unwrap(),
+                profile
+            );
+        }
+        assert!(serde_json::from_value::<ApiProfile>(json!("ultra")).is_err());
+
+        let params: EstimateParams = serde_json::from_value(json!({
+            "capability_token": "token",
+            "inputs": [],
+            "path_scope": {"read_roots": [], "write_roots": []}
+        }))
+        .unwrap();
+        assert_eq!(params.profile, ApiProfile::Raw);
+    }
+
+    #[test]
     fn duplicate_envelope_fields_and_batches_are_rejected() {
         let duplicate =
             br#"{"jsonrpc":"2.0","method":"list","method":"verify","params":{},"id":1}"#;
