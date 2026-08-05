@@ -6,9 +6,9 @@ define o contêiner PAF (`.pithos`), preserva paths e links de forma portável e
 prioriza determinismo, integridade verificável, limites de recursos e publicação
 atômica dos resultados.
 
-O objetivo é evoluir de um formato RAW/STORE auditável para um portfólio de
-codecs e otimizações estruturais sem sacrificar restauração byte-exact ou tornar
-o parser vulnerável a arquivos malformados.
+O formato evolui a partir de um baseline RAW/STORE auditável para um portfólio
+de codecs e otimizações estruturais sem sacrificar restauração byte-exact ou
+tornar o parser vulnerável a arquivos malformados.
 
 ## Para que serve
 
@@ -28,13 +28,23 @@ o parser vulnerável a arquivos malformados.
 | CLI `pack`, `unpack`, `list`, `inspect`, `extract`, `verify`, `capabilities` | Implementado em `standalone` e `daemon` |
 | Agent API local com 12 métodos | Implementada |
 | Jobs persistentes, idempotência, eventos, prioridades, quotas e recovery | Implementados |
-| Zstandard, Brotli, LZMA2 e solid groups | Fase 2 em implementação |
+| Zstandard, Brotli, LZMA2, seleção determinística e solid groups | Implementados e testados |
 | Deduplicação, similarity, transforms, recompression, viewer e mount | Fases posteriores |
 
-O perfil público disponível neste momento é `raw`. Ele usa STORE, sem compressão,
-e serve como baseline determinístico e verificável. Não confunda o estado atual
-com a visão completa do produto: codecs comprimidos e otimizações avançadas só
-serão anunciados quando seus respectivos gates estiverem verdes.
+Os perfis públicos de empacotamento são:
+
+| Perfil CLI | Objetivo | Alvo de solid group | Codecs candidatos |
+|---|---|---:|---|
+| `raw` | baseline sem compressão | arquivos independentes | STORE |
+| `stream` | baixa latência e grupos pequenos | 4 MiB | STORE, Zstandard |
+| `random` | acesso aleatório com grupos contidos | 8 MiB | STORE, Zstandard |
+| `balanced` | equilíbrio entre razão, memória e acesso | 64 MiB | STORE, Zstandard, Brotli, LZMA2 |
+| `archive-max` | máxima razão para arquivamento | 512 MiB | STORE, Zstandard, Brotli, LZMA2 |
+
+O engine avalia os candidatos permitidos pelo perfil e escolhe pelo custo total
+com tie-break determinístico. `raw` permanece o padrão por compatibilidade. Na
+Agent API JSON, o último perfil é escrito `archive_max`; a CLI e a resposta de
+`capabilities` usam `archive-max`.
 
 ## Garantias já implementadas
 
@@ -47,6 +57,10 @@ serão anunciados quando seus respectivos gates estiverem verdes.
 - daemon falha fechado quando não consegue persistir uma transição;
 - IPC restrito ao usuário local, sem listener TCP;
 - resultados de jobs e chaves de idempotência sobrevivem a restart.
+- cada codec obrigatório possui vetor de bytes e BLAKE3 fixado por teste;
+- perfis comprimidos validam identidade, timestamp, tamanho e hash da entrada
+  entre scan, hashing e encoding;
+- cotas de memória e espaço temporário são aplicadas separadamente pelo engine.
 
 O usuário do sistema operacional é a fronteira de segurança do daemon. O
 `path_scope` restringe clientes e automações a raízes canonicalizadas, mas não é
@@ -84,7 +98,7 @@ cargo llvm-cov --workspace --all-targets --fail-under-lines 80
 Empacotar uma árvore:
 
 ```text
-cargo run -p pithos-cli --bin pithos -- pack ./dados --output ./backup.pithos --profile raw
+cargo run -p pithos-cli --bin pithos -- pack ./dados --output ./backup.pithos --profile balanced
 ```
 
 Listar e verificar sem restaurar:
@@ -116,7 +130,7 @@ cargo run -p pithos-daemon --bin pithosd -- --state-dir ./.pithos-state --allow-
 Em outro terminal, use a mesma state directory e selecione o modo daemon:
 
 ```text
-cargo run -p pithos-cli --bin pithos -- --mode daemon --daemon-state-dir ./.pithos-state pack ./dados --output ./backup.pithos --profile raw
+cargo run -p pithos-cli --bin pithos -- --mode daemon --daemon-state-dir ./.pithos-state pack ./dados --output ./backup.pithos --profile balanced
 ```
 
 O transporte é Named Pipe no Windows e Unix Domain Socket no Unix. Não existe
@@ -144,6 +158,8 @@ recompression, viewer e mount, que serão preenchidas nas fases correspondentes.
 ## Documentação versionada
 
 - [`docs/paf-0.1-raw.md`](docs/paf-0.1-raw.md): layout RAW/STORE implementado;
+- [`docs/paf-0.1-compressed.md`](docs/paf-0.1-compressed.md): extensão comprimida,
+  registry de codecs, solid groups e perfis;
 - [`docs/agent-api-v1.md`](docs/agent-api-v1.md): transporte, sessões, métodos,
   jobs, quotas e erros públicos;
 - [`docs/adrs/ADRS.md`](docs/adrs/ADRS.md): decisões arquiteturais;

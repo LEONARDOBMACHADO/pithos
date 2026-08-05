@@ -40,6 +40,27 @@ The security boundary is the local OS user: socket/pipe permissions prevent acce
 
 Method parameters are strict schemas: unknown fields, wrong types, invalid identifiers, non-integer request IDs, methods outside the allowlist, excessive nesting, oversized arrays/strings and malformed JSON are rejected before a job is created. There is no shell or raw-command method.
 
+## Compression profiles
+
+`estimate` and `pack` accept the strict JSON enum `raw`, `stream`, `random`,
+`balanced` or `archive_max`. Omitting the field defaults to `raw` for backward
+compatibility; any other value is rejected before work is created. The CLI
+spelling of the last value is `archive-max`, and `capabilities` reports the same
+hyphenated user-facing spelling.
+
+| Agent API value | Solid-group target | Candidate codecs |
+|---|---:|---|
+| `raw` | independent files | STORE |
+| `stream` | 4 MiB | STORE, Zstandard |
+| `random` | 8 MiB | STORE, Zstandard |
+| `balanced` | 64 MiB | STORE, Zstandard, Brotli, LZMA2 |
+| `archive_max` | 512 MiB | STORE, Zstandard, Brotli, LZMA2 |
+
+Candidate selection accounts for payload and structural costs and uses a stable
+codec-ID tie-break. Resource estimates are profile-aware, include conservative
+container overhead and use checked arithmetic. They remain estimates rather than
+promises of a compression ratio.
+
 ## Jobs, idempotency and events
 
 Public states are `queued`, `running`, `cancelling`, `completed`, `failed` and `cancelled`. Terminal state is immutable. A queued cancellation publishes no output. A running cancellation signals the engine token and waits for an I/O checkpoint. If atomic publication has already won the race, the job completes instead of claiming that a published artifact was cancelled.
@@ -75,6 +96,12 @@ Default daemon ceilings are:
 | retained jobs/idempotency records | 4096 |
 
 A request may lower its limits but cannot exceed daemon ceilings. Work acquires bounded job, thread and weighted-memory permits before entering the blocking pool. Input/output/temp estimates are checked before execution, and engine-side counters enforce actual input, metadata, temporary and published-output budgets while bytes are processed. Directory scanning charges entries, path storage and pending child buffers before retaining them. Decode limits count all metadata sections together. Metadata-only RPC results are also bounded by both the job output quota and the IPC response frame. Cancellation and deadline checks occur while queued, while waiting for permits and at engine I/O checkpoints.
+
+Pack execution passes the job's memory and temporary-space ceilings as separate
+engine limits. Codec tasks are rejected before dispatch when their declared
+input, scratch and output bounds do not fit the memory ceiling. Compressed input
+is bound to the file identity captured during scan and is rechecked for identity,
+length, modification time and BLAKE3 across both read passes.
 
 If a state mutation cannot be durably recorded, the daemon fails closed: it stops accepting requests and cancels running work. Graceful IPC shutdown stops accepting connections, terminates connection tasks, cancels queued/running jobs, waits for terminal persistence and removes the owned UDS endpoint.
 
