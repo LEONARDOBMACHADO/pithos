@@ -10,3 +10,6 @@ pithos-core = { path = "../pithos-core" }
 zstd.workspace = true
 brotli.workspace = true
 liblzma.workspace = true
+
+[dev-dependencies]
+blake3.workspace = true

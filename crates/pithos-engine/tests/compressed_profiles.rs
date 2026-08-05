@@ -1,3 +1,4 @@
+use pithos_codecs::{BrotliCodec, Codec, CodecConfig, CodecId, Lzma2Codec, StoreCodec, ZstdCodec};
 use pithos_core::CompressionProfile;
 use pithos_engine::{PackRequest, UnpackRequest, pack, unpack, verify};
 use pithos_format::{
@@ -80,6 +81,34 @@ fn balanced_roundtrip_uses_registry_and_one_logical_solid_group() {
     assert_eq!(groups[0].group.chunk_count, 3);
     assert_ne!(groups[0].group.codec_chain_id, 0);
     assert!(groups[0].group.compressed_len < groups[0].group.uncompressed_len);
+    let selected = registry.chain(groups[0].group.codec_chain_id).unwrap();
+    let codec: &dyn Codec = match CodecId::from_u16(selected.codec_id).unwrap() {
+        CodecId::Store => &StoreCodec,
+        CodecId::Zstd => &ZstdCodec,
+        CodecId::Brotli => &BrotliCodec,
+        CodecId::Lzma2 => &Lzma2Codec,
+    };
+    let independent_compressed_len = expected
+        .iter()
+        .map(|(_, bytes)| {
+            let mut encoded = Vec::new();
+            codec
+                .encode(
+                    bytes,
+                    &CodecConfig {
+                        level: selected.level,
+                    },
+                    &mut encoded,
+                )
+                .unwrap();
+            encoded.len() as u64
+        })
+        .sum::<u64>();
+    assert!(
+        groups[0].group.compressed_len < independent_compressed_len,
+        "solid={} independent={independent_compressed_len}",
+        groups[0].group.compressed_len
+    );
 
     let restored = temp.path().join("restored");
     unpack(UnpackRequest {

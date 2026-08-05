@@ -326,6 +326,52 @@ mod tests {
     }
 
     #[test]
+    fn mandatory_codec_conformance_vectors_have_stable_bytes() {
+        let codecs = [
+            ("STORE", &StoreCodec as &dyn Codec),
+            ("Zstandard", &ZstdCodec as &dyn Codec),
+            ("Brotli", &BrotliCodec as &dyn Codec),
+            ("LZMA2", &Lzma2Codec as &dyn Codec),
+        ];
+        let actual = codecs.map(|(name, codec)| {
+            let mut encoded = Vec::new();
+            codec
+                .encode(SAMPLE, &config(codec.id()), &mut encoded)
+                .unwrap();
+            (
+                name,
+                encoded.len(),
+                blake3::hash(&encoded).to_hex().to_string(),
+            )
+        });
+        assert_eq!(
+            actual,
+            [
+                (
+                    "STORE",
+                    64,
+                    "50cc8ea42bc6bf890d36afe45d76241c2ab3534e14b7ea3f98eacfe975e3f09e".to_owned(),
+                ),
+                (
+                    "Zstandard",
+                    62,
+                    "535bc8743723197f8ffeea422da15315837e9feb2527b573354402930e973b49".to_owned(),
+                ),
+                (
+                    "Brotli",
+                    58,
+                    "9edb15fc9b624927b0f6a71b44016edcea83e515671609e15842254e222600dd".to_owned(),
+                ),
+                (
+                    "LZMA2",
+                    112,
+                    "ae12db73ef72d5a167722828c74d6bc69848f7363cee6978439e734e64d2fbb9".to_owned(),
+                ),
+            ]
+        );
+    }
+
+    #[test]
     fn decoder_rejects_output_larger_than_declared_length() {
         for codec in [&ZstdCodec as &dyn Codec, &BrotliCodec, &Lzma2Codec] {
             let mut encoded = Vec::new();

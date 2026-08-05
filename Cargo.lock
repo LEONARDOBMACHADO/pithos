@@ -512,6 +512,7 @@ dependencies = [
 name = "pithos-codecs"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "brotli",
  "liblzma",
  "pithos-core",
