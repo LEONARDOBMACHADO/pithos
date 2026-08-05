@@ -1228,6 +1228,7 @@ fn execute_operation(
                 },
                 &PackLimits {
                     max_input_bytes: limits.max_output.min(limits.max_temp),
+                    max_memory_bytes: limits.max_memory,
                     max_temp_bytes: limits.max_temp,
                     max_output_bytes: limits.max_output,
                     max_metadata_bytes: metadata_budget,

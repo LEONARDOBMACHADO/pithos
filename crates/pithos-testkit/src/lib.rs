@@ -541,6 +541,7 @@ mod tests {
             },
             &PackLimits {
                 max_input_bytes: 2048,
+                max_memory_bytes: 1024 * 1024,
                 max_temp_bytes: 512,
                 max_output_bytes: 512,
                 max_metadata_bytes: 1024 * 1024,

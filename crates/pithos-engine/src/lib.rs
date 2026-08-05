@@ -43,6 +43,7 @@ pub struct PackRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackLimits {
     pub max_input_bytes: u64,
+    pub max_memory_bytes: u64,
     pub max_temp_bytes: u64,
     pub max_output_bytes: u64,
     pub max_metadata_bytes: u64,
@@ -54,6 +55,7 @@ impl Default for PackLimits {
         let decode = DecodeLimits::default();
         Self {
             max_input_bytes: decode.max_original_bytes,
+            max_memory_bytes: u64::MAX,
             max_temp_bytes: u64::MAX,
             max_output_bytes: u64::MAX,
             max_metadata_bytes: decode.max_metadata_bytes,
@@ -646,7 +648,9 @@ fn pack_compressed_with_limits(
         .map(usize::from)
         .unwrap_or(1)
         .min(8);
-    let memory_budget = pack_limits.max_temp_bytes.clamp(1, 2 * 1024 * 1024 * 1024);
+    let memory_budget = pack_limits
+        .max_memory_bytes
+        .clamp(1, 2 * 1024 * 1024 * 1024);
     let scheduler_config = scheduler::SchedulerConfig::new(workers, memory_budget, parent)?;
     let scheduler_cancellation = scheduler::CancellationToken::new();
     let mut tasks = Vec::with_capacity(plans.len());
