@@ -1,6 +1,6 @@
 //! Codecs Portfolio Trait & STORE Codec
 
-use pithos_core::Result;
+use pithos_core::{PithosError, Result};
 use std::io::{Read, Write};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -11,11 +11,57 @@ pub enum CodecId {
     Lzma2 = 3,
 }
 
+/// Fixed implementation version recorded by a future codec registry.
+pub type CodecVersion = u16;
+
+const CODEC_VERSION_V1: CodecVersion = 1;
+const COPY_BUFFER_SIZE: usize = 8 * 1024;
+
+/// The mandatory Zstd codec, with deterministic single-threaded parameters.
+pub struct ZstdCodec;
+
+/// The mandatory Brotli codec, with deterministic fixed quality and window.
+pub struct BrotliCodec;
+
+/// The mandatory LZMA2 codec, encoded in the XZ container with a fixed preset.
+pub struct Lzma2Codec;
+
 pub trait Codec: Send + Sync {
     fn id(&self) -> CodecId;
+    fn version(&self) -> CodecVersion {
+        CODEC_VERSION_V1
+    }
     fn encode(&self, input: &[u8], output: &mut dyn Write) -> Result<u64>;
     fn decode(&self, input: &mut dyn Read, expected_len: u64, output: &mut dyn Write)
     -> Result<()>;
+}
+
+fn copy_decoded_limited(
+    input: &mut dyn Read,
+    expected_len: u64,
+    output: &mut dyn Write,
+) -> Result<()> {
+    let mut buffer = [0_u8; COPY_BUFFER_SIZE];
+    let mut written = 0_u64;
+    loop {
+        let read = input.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        written = written
+            .checked_add(read as u64)
+            .ok_or(PithosError::IntegerOverflow)?;
+        if written > expected_len {
+            return Err(PithosError::ResourceLimit(
+                "decoded output exceeds declared group length",
+            ));
+        }
+        output.write_all(&buffer[..read])?;
+    }
+    if written != expected_len {
+        return Err(PithosError::InvalidRange);
+    }
+    Ok(())
 }
 
 /// Implementação do Codec STORE (RAW sem compressão)
@@ -52,12 +98,84 @@ impl Codec for StoreCodec {
     }
 }
 
+impl Codec for ZstdCodec {
+    fn id(&self) -> CodecId {
+        CodecId::Zstd
+    }
+
+    fn encode(&self, input: &[u8], output: &mut dyn Write) -> Result<u64> {
+        // Level 9 is fixed and zstd's streaming helper is single-threaded.
+        let encoded = zstd::stream::encode_all(input, 9)?;
+        output.write_all(&encoded)?;
+        Ok(encoded.len() as u64)
+    }
+
+    fn decode(
+        &self,
+        input: &mut dyn Read,
+        expected_len: u64,
+        output: &mut dyn Write,
+    ) -> Result<()> {
+        let mut decoder = zstd::stream::read::Decoder::new(input)?;
+        copy_decoded_limited(&mut decoder, expected_len, output)
+    }
+}
+
+impl Codec for BrotliCodec {
+    fn id(&self) -> CodecId {
+        CodecId::Brotli
+    }
+
+    fn encode(&self, input: &[u8], output: &mut dyn Write) -> Result<u64> {
+        // Quality/window are deliberately fixed for reproducible output.
+        let mut encoder = brotli::CompressorWriter::new(Vec::new(), COPY_BUFFER_SIZE, 9, 22);
+        encoder.write_all(input)?;
+        let encoded = encoder.into_inner();
+        output.write_all(&encoded)?;
+        Ok(encoded.len() as u64)
+    }
+
+    fn decode(
+        &self,
+        input: &mut dyn Read,
+        expected_len: u64,
+        output: &mut dyn Write,
+    ) -> Result<()> {
+        let mut decoder = brotli::Decompressor::new(input, COPY_BUFFER_SIZE);
+        copy_decoded_limited(&mut decoder, expected_len, output)
+    }
+}
+
+impl Codec for Lzma2Codec {
+    fn id(&self) -> CodecId {
+        CodecId::Lzma2
+    }
+
+    fn encode(&self, input: &[u8], output: &mut dyn Write) -> Result<u64> {
+        // The crate's default encoder is single-threaded; preset 6 is fixed.
+        let encoded = liblzma::encode_all(input, 6)?;
+        output.write_all(&encoded)?;
+        Ok(encoded.len() as u64)
+    }
+
+    fn decode(
+        &self,
+        input: &mut dyn Read,
+        expected_len: u64,
+        output: &mut dyn Write,
+    ) -> Result<()> {
+        let mut decoder = liblzma::read::XzDecoder::new(input);
+        copy_decoded_limited(&mut decoder, expected_len, output)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Cursor;
 
-    const SAMPLE: &[u8] = b"Pithos codec conformance vector: \x00\x01\x02 repeated repeated repeated.";
+    const SAMPLE: &[u8] =
+        b"Pithos codec conformance vector: \x00\x01\x02 repeated repeated repeated.";
 
     fn assert_round_trip(codec: &dyn Codec) {
         let mut encoded = Vec::new();
@@ -95,13 +213,34 @@ mod tests {
             let mut encoded = Vec::new();
             codec.encode(&vec![7; 16 * 1024], &mut encoded).unwrap();
             let result = codec.decode(&mut Cursor::new(encoded), 1, &mut Vec::new());
-            assert!(matches!(result, Err(pithos_core::PithosError::ResourceLimit(_))));
+            assert!(matches!(
+                result,
+                Err(pithos_core::PithosError::ResourceLimit(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn compressed_codecs_reject_corrupted_payloads() {
+        for codec in [&ZstdCodec as &dyn Codec, &BrotliCodec, &Lzma2Codec] {
+            let mut encoded = Vec::new();
+            codec.encode(&vec![3; 4 * 1024], &mut encoded).unwrap();
+            let corruption_offset = encoded.len() / 2;
+            encoded[corruption_offset] ^= 0x80;
+            assert!(
+                codec
+                    .decode(&mut Cursor::new(encoded), 4 * 1024, &mut Vec::new())
+                    .is_err()
+            );
         }
     }
 
     #[test]
     fn store_rejects_truncated_input() {
         let result = StoreCodec.decode(&mut Cursor::new([1, 2]), 3, &mut Vec::new());
-        assert!(matches!(result, Err(pithos_core::PithosError::InvalidRange)));
+        assert!(matches!(
+            result,
+            Err(pithos_core::PithosError::InvalidRange)
+        ));
     }
 }
