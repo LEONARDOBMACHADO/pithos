@@ -177,9 +177,15 @@ mod tests {
     const SAMPLE: &[u8] =
         b"Pithos codec conformance vector: \x00\x01\x02 repeated repeated repeated.";
 
+    fn config(codec: CodecId) -> CodecConfig {
+        CodecConfig::deterministic_default(codec)
+    }
+
     fn assert_round_trip(codec: &dyn Codec) {
         let mut encoded = Vec::new();
-        codec.encode(SAMPLE, &mut encoded).unwrap();
+        let stats = codec.encode(SAMPLE, &config(codec.id()), &mut encoded).unwrap();
+        assert_eq!(stats.input_bytes, SAMPLE.len() as u64);
+        assert_eq!(stats.output_bytes, encoded.len() as u64);
         let mut decoded = Vec::new();
         codec
             .decode(&mut Cursor::new(encoded), SAMPLE.len() as u64, &mut decoded)
@@ -201,8 +207,12 @@ mod tests {
             let input = vec![b'a'; 32 * 1024];
             let mut first = Vec::new();
             let mut second = Vec::new();
-            codec.encode(&input, &mut first).unwrap();
-            codec.encode(&input, &mut second).unwrap();
+            codec
+                .encode(&input, &config(codec.id()), &mut first)
+                .unwrap();
+            codec
+                .encode(&input, &config(codec.id()), &mut second)
+                .unwrap();
             assert_eq!(first, second, "{:?} must be deterministic", codec.id());
         }
     }
@@ -211,7 +221,13 @@ mod tests {
     fn decoder_rejects_output_larger_than_declared_length() {
         for codec in [&ZstdCodec as &dyn Codec, &BrotliCodec, &Lzma2Codec] {
             let mut encoded = Vec::new();
-            codec.encode(&vec![7; 16 * 1024], &mut encoded).unwrap();
+            codec
+                .encode(
+                    &vec![7; 16 * 1024],
+                    &config(codec.id()),
+                    &mut encoded,
+                )
+                .unwrap();
             let result = codec.decode(&mut Cursor::new(encoded), 1, &mut Vec::new());
             assert!(matches!(
                 result,
@@ -224,7 +240,13 @@ mod tests {
     fn compressed_codecs_reject_corrupted_payloads() {
         for codec in [&ZstdCodec as &dyn Codec, &BrotliCodec, &Lzma2Codec] {
             let mut encoded = Vec::new();
-            codec.encode(&vec![3; 4 * 1024], &mut encoded).unwrap();
+            codec
+                .encode(
+                    &vec![3; 4 * 1024],
+                    &config(codec.id()),
+                    &mut encoded,
+                )
+                .unwrap();
             let corruption_offset = encoded.len() / 2;
             encoded[corruption_offset] ^= 0x80;
             assert!(
@@ -242,5 +264,33 @@ mod tests {
             result,
             Err(pithos_core::PithosError::InvalidRange)
         ));
+    }
+
+    #[test]
+    fn codec_memory_bounds_are_checked_and_nonzero() {
+        for codec in [
+            &StoreCodec as &dyn Codec,
+            &ZstdCodec,
+            &BrotliCodec,
+            &Lzma2Codec,
+        ] {
+            let bound = codec
+                .memory_bound(64 * 1024, &config(codec.id()))
+                .unwrap();
+            assert!(bound >= 64 * 1024);
+            assert_eq!(codec.version(), 1);
+        }
+        assert!(StoreCodec
+            .memory_bound(u64::MAX, &config(CodecId::Store))
+            .is_err());
+    }
+
+    #[test]
+    fn codec_rejects_levels_outside_its_supported_range() {
+        let invalid = CodecConfig { level: 99 };
+        for codec in [&ZstdCodec as &dyn Codec, &BrotliCodec, &Lzma2Codec] {
+            assert!(codec.encode(SAMPLE, &invalid, &mut Vec::new()).is_err());
+            assert!(codec.memory_bound(1, &invalid).is_err());
+        }
     }
 }
