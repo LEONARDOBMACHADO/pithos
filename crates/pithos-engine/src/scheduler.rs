@@ -251,9 +251,15 @@ fn run_task(
 ) -> Result<SpoolHandle> {
     cancellation.checkpoint()?;
     let task_id = task.task_id;
+    let output_bound = task.resources.output_bound;
     let payload = (task.action)(cancellation)?;
     cancellation.checkpoint()?;
     let len = u64::try_from(payload.len()).map_err(|_| PithosError::IntegerOverflow)?;
+    if len > output_bound {
+        return Err(PithosError::ResourceLimit(
+            "scheduled task exceeded reserved output bound",
+        ));
+    }
     let mut file = tempfile::Builder::new()
         .prefix("pithos-spool-")
         .tempfile_in(spool_directory)?;
