@@ -13,8 +13,8 @@ use pithos_agent_api::{
 use pithos_core::{CompressionProfile, DecodeLimits, PithosError};
 use pithos_engine::{
     CancellationToken, ExtractRequest, PackLimits, PackRequest, ReadRangeRequest, UnpackRequest,
-    extract_with_control_and_limits, inspect_with_control, list_with_control,
-    pack_with_limits_and_control, read_range_to_writer_with_control,
+    estimate_pack_resources, extract_with_control_and_limits, inspect_with_control,
+    list_with_control, pack_with_limits_and_control, read_range_to_writer_with_control,
     unpack_with_control_and_temp_limit, verify_with_control,
 };
 use rand::Rng;
@@ -297,23 +297,41 @@ impl DaemonService {
                 let params: EstimateParams = decode_params(params)?;
                 let session = self.authenticate(connection_id, &params.capability_token)?;
                 let eligible = !params.inputs.is_empty();
-                let total = run_blocking(move || {
+                let profile = engine_profile(&params.profile);
+                let measurement = run_blocking(move || {
                     let request_authorizer = PathAuthorizer::new(&params.path_scope)?;
-                    let mut total = 0_u64;
+                    let mut total = PathMeasurement::default();
                     for input in &params.inputs {
                         let path = authorize_read(&session, &request_authorizer, input)?;
-                        total = total
-                            .checked_add(measure_path(&path)?)
+                        let measured = measure_path(&path)?;
+                        total.bytes = total
+                            .bytes
+                            .checked_add(measured.bytes)
                             .ok_or_else(|| JsonRpcError::resource_limit("input size overflow"))?;
+                        total.entries = total
+                            .entries
+                            .checked_add(measured.entries)
+                            .ok_or_else(|| JsonRpcError::resource_limit("input entry overflow"))?;
+                        if total.entries > 10_000_000 {
+                            return Err(JsonRpcError::resource_limit("input entry limit exceeded"));
+                        }
+                        total.max_file_bytes = total.max_file_bytes.max(measured.max_file_bytes);
                     }
                     Ok(total)
                 })
                 .await?;
+                let estimate = estimate_pack_resources(
+                    profile,
+                    measurement.bytes,
+                    measurement.max_file_bytes,
+                    measurement.entries,
+                )
+                .map_err(map_engine_error)?;
                 let result = EstimateResult {
-                    input_bytes: total,
-                    estimated_memory: total.clamp(64 * 1024, 256 * 1024 * 1024),
-                    estimated_temp: total,
-                    output_upper_bound: total,
+                    input_bytes: measurement.bytes,
+                    estimated_memory: estimate.estimated_memory,
+                    estimated_temp: estimate.estimated_temp,
+                    output_upper_bound: estimate.output_upper_bound,
                     eligible,
                 };
                 serde_json::to_value(result).map_err(|_| internal("cannot encode estimate"))
@@ -336,7 +354,7 @@ impl DaemonService {
                     for input in &requested_inputs {
                         let path = authorize_read(&path_session, &request_authorizer, input)?;
                         input_bytes = input_bytes
-                            .checked_add(measure_path(&path)?)
+                            .checked_add(measure_path(&path)?.bytes)
                             .ok_or_else(|| JsonRpcError::resource_limit("input size overflow"))?;
                         inputs.push(path);
                     }
@@ -1218,13 +1236,7 @@ fn execute_operation(
                 PackRequest {
                     inputs,
                     output: output.clone(),
-                    profile: match profile {
-                        ApiProfile::Raw => CompressionProfile::Raw,
-                        ApiProfile::Stream => CompressionProfile::Stream,
-                        ApiProfile::Random => CompressionProfile::Random,
-                        ApiProfile::Balanced => CompressionProfile::Balanced,
-                        ApiProfile::ArchiveMax => CompressionProfile::ArchiveMax,
-                    },
+                    profile: engine_profile(&profile),
                 },
                 &PackLimits {
                     max_input_bytes: limits.max_output.min(limits.max_temp),
@@ -1341,6 +1353,16 @@ fn execute_operation(
     Ok(value)
 }
 
+const fn engine_profile(profile: &ApiProfile) -> CompressionProfile {
+    match profile {
+        ApiProfile::Raw => CompressionProfile::Raw,
+        ApiProfile::Stream => CompressionProfile::Stream,
+        ApiProfile::Random => CompressionProfile::Random,
+        ApiProfile::Balanced => CompressionProfile::Balanced,
+        ApiProfile::ArchiveMax => CompressionProfile::ArchiveMax,
+    }
+}
+
 fn revalidate_operation_paths(operation: &StoredOperation) -> Result<(), JsonRpcError> {
     match operation {
         StoredOperation::Pack { inputs, output, .. } => {
@@ -1416,13 +1438,27 @@ fn authorize_write(
     request.authorize_write(&path)
 }
 
-fn measure_path(path: &Path) -> Result<u64, JsonRpcError> {
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct PathMeasurement {
+    bytes: u64,
+    entries: u64,
+    max_file_bytes: u64,
+}
+
+fn measure_path(path: &Path) -> Result<PathMeasurement, JsonRpcError> {
     let metadata = fs::symlink_metadata(path).map_err(|_| permission_denied())?;
     if metadata.file_type().is_symlink() {
-        return Ok(0);
+        return Ok(PathMeasurement {
+            entries: 1,
+            ..PathMeasurement::default()
+        });
     }
     if metadata.is_file() {
-        return Ok(metadata.len());
+        return Ok(PathMeasurement {
+            bytes: metadata.len(),
+            entries: 1,
+            max_file_bytes: metadata.len(),
+        });
     }
     if !metadata.is_dir() {
         return Err(JsonRpcError::domain(
@@ -1430,27 +1466,31 @@ fn measure_path(path: &Path) -> Result<u64, JsonRpcError> {
             "unsupported input type",
         ));
     }
-    let mut total = 0_u64;
+    let mut measurement = PathMeasurement {
+        entries: 1,
+        ..PathMeasurement::default()
+    };
     let mut pending = vec![path.to_path_buf()];
-    let mut entries = 0_u64;
     while let Some(directory) = pending.pop() {
         for entry in fs::read_dir(directory).map_err(|_| permission_denied())? {
             let entry = entry.map_err(|_| permission_denied())?;
-            entries = entries.saturating_add(1);
-            if entries > 10_000_000 {
+            measurement.entries = measurement.entries.saturating_add(1);
+            if measurement.entries > 10_000_000 {
                 return Err(JsonRpcError::resource_limit("input entry limit exceeded"));
             }
             let metadata = fs::symlink_metadata(entry.path()).map_err(|_| permission_denied())?;
             if metadata.is_file() {
-                total = total
+                measurement.bytes = measurement
+                    .bytes
                     .checked_add(metadata.len())
                     .ok_or_else(|| JsonRpcError::resource_limit("input size overflow"))?;
+                measurement.max_file_bytes = measurement.max_file_bytes.max(metadata.len());
             } else if metadata.is_dir() && !metadata.file_type().is_symlink() {
                 pending.push(entry.path());
             }
         }
     }
-    Ok(total)
+    Ok(measurement)
 }
 
 fn transfer_cleanup_record(value: &Value, state_dir: &Path) -> Option<(PathBuf, u64)> {

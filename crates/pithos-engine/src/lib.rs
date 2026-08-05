@@ -12,7 +12,7 @@ use pithos_format::{
     SectionType,
 };
 use pithos_io::{atomic_commit, create_atomic_spool};
-use pithos_planner::{CandidateCost, SolidGroupPlan, plan_solid_groups};
+use pithos_planner::{CandidateCost, SolidGroupPlan, plan_solid_groups, solid_group_target};
 use serde::{Serialize, de::DeserializeOwned};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
@@ -62,6 +62,72 @@ impl Default for PackLimits {
             max_entries: decode.max_entries,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PackResourceEstimate {
+    pub estimated_memory: u64,
+    pub estimated_temp: u64,
+    pub output_upper_bound: u64,
+}
+
+pub fn estimate_pack_resources(
+    profile: CompressionProfile,
+    input_bytes: u64,
+    max_file_bytes: u64,
+    entry_count: u64,
+) -> Result<PackResourceEstimate> {
+    const ENTRY_OUTPUT_OVERHEAD: u64 = 1024 * 1024;
+    const FIXED_OUTPUT_OVERHEAD: u64 = 16 * 1024 * 1024;
+    const SCAN_ENTRY_MEMORY: u64 = 512;
+
+    let metadata_upper_bound = entry_count
+        .checked_mul(ENTRY_OUTPUT_OVERHEAD)
+        .and_then(|value| value.checked_add(FIXED_OUTPUT_OVERHEAD))
+        .ok_or(PithosError::IntegerOverflow)?;
+    let output_upper_bound = input_bytes
+        .checked_add(metadata_upper_bound)
+        .ok_or(PithosError::IntegerOverflow)?;
+    let scan_memory = entry_count
+        .checked_mul(SCAN_ENTRY_MEMORY)
+        .and_then(|value| value.checked_add(IO_BUFFER_SIZE as u64))
+        .ok_or(PithosError::IntegerOverflow)?;
+
+    if profile == CompressionProfile::Raw {
+        return Ok(PackResourceEstimate {
+            estimated_memory: scan_memory,
+            estimated_temp: output_upper_bound,
+            output_upper_bound,
+        });
+    }
+
+    let target = solid_group_target(profile);
+    let largest_group = max_file_bytes.max(input_bytes.min(target));
+    let codec_memory =
+        profile_codecs(profile)
+            .into_iter()
+            .try_fold(0_u64, |maximum, codec_id| {
+                let config = CodecConfig::deterministic_default(codec_id);
+                Ok::<u64, PithosError>(
+                    maximum.max(codec_for_id(codec_id).memory_bound(largest_group, &config)?),
+                )
+            })?;
+    let selected_output_bound = largest_group
+        .checked_add(ENTRY_OUTPUT_OVERHEAD + 2)
+        .ok_or(PithosError::IntegerOverflow)?;
+    let estimated_memory = codec_memory
+        .checked_add(selected_output_bound)
+        .ok_or(PithosError::IntegerOverflow)?
+        .max(scan_memory);
+    let estimated_temp = input_bytes
+        .checked_add(output_upper_bound)
+        .ok_or(PithosError::IntegerOverflow)?;
+
+    Ok(PackResourceEstimate {
+        estimated_memory,
+        estimated_temp,
+        output_upper_bound,
+    })
 }
 
 pub struct UnpackRequest {

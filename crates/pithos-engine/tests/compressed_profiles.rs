@@ -1,6 +1,8 @@
 use pithos_codecs::{BrotliCodec, Codec, CodecConfig, CodecId, Lzma2Codec, StoreCodec, ZstdCodec};
 use pithos_core::{CompressionProfile, PithosError};
-use pithos_engine::{CancellationToken, PackLimits, pack_with_limits_and_control};
+use pithos_engine::{
+    CancellationToken, PackLimits, estimate_pack_resources, pack_with_limits_and_control,
+};
 use pithos_engine::{PackRequest, UnpackRequest, pack, unpack, verify};
 use pithos_format::{
     CodecRegistry, GlobalHeader, GroupTableRecord, HEADER_LEN, SECTION_ENTRY_LEN,
@@ -210,4 +212,30 @@ fn compressed_pack_honors_memory_budget_independently_from_temp_budget() {
 
     assert!(matches!(error, PithosError::MemoryLimit));
     assert!(!archive.exists());
+}
+
+#[test]
+fn pack_resource_estimates_are_profile_aware_conservative_and_checked() {
+    let input_bytes = 128 * 1024 * 1024;
+    let profiles = [
+        CompressionProfile::Raw,
+        CompressionProfile::Stream,
+        CompressionProfile::Random,
+        CompressionProfile::Balanced,
+        CompressionProfile::ArchiveMax,
+    ];
+    let estimates = profiles
+        .map(|profile| estimate_pack_resources(profile, input_bytes, 1024 * 1024, 32).unwrap());
+
+    assert!(
+        estimates
+            .windows(2)
+            .all(|pair| pair[0].estimated_memory < pair[1].estimated_memory)
+    );
+    assert!(estimates[0].output_upper_bound > input_bytes);
+    assert!(estimates[1].estimated_temp > estimates[0].estimated_temp);
+    assert!(matches!(
+        estimate_pack_resources(CompressionProfile::Balanced, u64::MAX, u64::MAX, u64::MAX),
+        Err(PithosError::IntegerOverflow)
+    ));
 }
