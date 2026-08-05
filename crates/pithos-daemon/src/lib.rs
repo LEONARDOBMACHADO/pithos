@@ -699,10 +699,23 @@ mod tests {
         let service = DaemonService::open(config).unwrap();
         let token = open_session(&service, 30, temp.path()).await;
 
-        let estimate = rpc(
+        let raw_estimate = rpc(
             &service,
             30,
             2,
+            "estimate",
+            serde_json::json!({
+                "capability_token": token,
+                "inputs": [source],
+                "path_scope": {"read_roots": [temp.path()], "write_roots": [temp.path()]},
+                "profile": "raw"
+            }),
+        )
+        .await;
+        let estimate = rpc(
+            &service,
+            30,
+            3,
             "estimate",
             serde_json::json!({
                 "capability_token": token,
@@ -713,11 +726,20 @@ mod tests {
         )
         .await;
         assert_eq!(estimate["result"]["input_bytes"], 10);
+        assert!(
+            estimate["result"]["estimated_memory"].as_u64().unwrap()
+                > raw_estimate["result"]["estimated_memory"].as_u64().unwrap()
+        );
+        assert!(
+            estimate["result"]["estimated_temp"].as_u64().unwrap()
+                > raw_estimate["result"]["estimated_temp"].as_u64().unwrap()
+        );
+        assert!(estimate["result"]["output_upper_bound"].as_u64().unwrap() > 10);
 
         let packed = rpc(
             &service,
             30,
-            3,
+            4,
             "pack",
             serde_json::json!({
                 "context": job_context(&token, "workflow-pack", temp.path()),
