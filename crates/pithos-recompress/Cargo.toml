@@ -1,0 +1,9 @@
+[package]
+name = "pithos-recompress"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+pithos-core = { path = "../pithos-core" }

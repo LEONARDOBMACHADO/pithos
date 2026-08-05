@@ -1,0 +1,12 @@
+[package]
+name = "pithos-analysis"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+pithos-core = { path = "../pithos-core" }
+xxhash-rust.workspace = true
+blake3.workspace = true
+crc32c.workspace = true

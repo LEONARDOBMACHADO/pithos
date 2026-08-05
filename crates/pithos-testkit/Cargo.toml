@@ -1,0 +1,16 @@
+[package]
+name = "pithos-testkit"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+pithos-core = { path = "../pithos-core" }
+pithos-engine = { path = "../pithos-engine" }
+pithos-format = { path = "../pithos-format" }
+blake3.workspace = true
+crc32c.workspace = true
+tempfile.workspace = true
+proptest.workspace = true
+same-file.workspace = true

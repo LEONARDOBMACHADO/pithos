@@ -1,0 +1,5 @@
+# Keep source, manifests and documentation stable across Windows and Unix.
+* text=auto eol=lf
+
+# Pithos containers are binary artifacts and are intentionally ignored by default.
+*.pithos binary

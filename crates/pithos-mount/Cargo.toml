@@ -1,0 +1,13 @@
+[package]
+name = "pithos-mount"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "pithos-mount"
+path = "src/main.rs"
+
+[dependencies]
+pithos-core = { path = "../pithos-core" }

@@ -1,0 +1,33 @@
+# Rust build and coverage output
+/target/
+/fuzz/target/
+/coverage/
+*.profraw
+*.lcov
+**/*.rs.bk
+
+# Generated archives, daemon state and temporary files
+*.pithos
+*.log
+*.tmp
+/.pithos-state/
+/pithos-state/
+/tmp/
+
+# Local secrets and editor/OS metadata
+.env
+.env.*
+!.env.example
+/.idea/
+/.vscode/
+.DS_Store
+Thumbs.db
+
+# Local agent/runtime state
+/.agents/
+/.codex/
+
+# Internal implementation plans and generated gate evidence. Public format,
+# protocol and architecture documentation under docs/ remains versioned.
+/PITHOS_*.md
+/docs/gates/

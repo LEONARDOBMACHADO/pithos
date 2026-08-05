@@ -1,0 +1,12 @@
+[package]
+name = "pithos-codecs"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+pithos-core = { path = "../pithos-core" }
+zstd.workspace = true
+brotli.workspace = true
+liblzma.workspace = true

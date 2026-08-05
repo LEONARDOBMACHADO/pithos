@@ -1,0 +1,68 @@
+[package]
+name = "pithos-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+pithos-engine = { path = "../crates/pithos-engine" }
+pithos-format = { path = "../crates/pithos-format" }
+pithos-agent-api = { path = "../crates/pithos-agent-api" }
+serde_json = "1"
+tempfile = "3"
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "header"
+path = "fuzz_targets/header.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "section_directory"
+path = "fuzz_targets/section_directory.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "entry_table"
+path = "fuzz_targets/entry_table.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "group_table"
+path = "fuzz_targets/group_table.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "restore_map"
+path = "fuzz_targets/restore_map.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "full_raw_archive"
+path = "fuzz_targets/full_raw_archive.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "json_rpc_request"
+path = "fuzz_targets/json_rpc_request.rs"
+test = false
+doc = false
+bench = false

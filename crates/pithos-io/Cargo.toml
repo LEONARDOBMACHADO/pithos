@@ -1,0 +1,12 @@
+[package]
+name = "pithos-io"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+pithos-core = { path = "../pithos-core" }
+tempfile.workspace = true
+tracing.workspace = true
+memmap2.workspace = true

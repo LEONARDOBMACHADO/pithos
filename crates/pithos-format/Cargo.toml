@@ -1,0 +1,15 @@
+[package]
+name = "pithos-format"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+pithos-core = { path = "../pithos-core" }
+crc32c.workspace = true
+blake3.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
