@@ -6,10 +6,11 @@ use std::{
 
 use pithos_analysis::{
     ChunkOrigin, ChunkingConfig, ChunkingMethod, LogicalChunkDraft, assign_chunk_ids,
-    chunk_fastcdc, chunk_fastcdc_reader, chunk_fastcdc_reader_with_checkpoint,
-    chunk_fastcdc_with_checkpoint, chunk_fixed_high_entropy,
+    assign_chunk_ids_with_checkpoint, chunk_fastcdc, chunk_fastcdc_reader,
+    chunk_fastcdc_reader_with_checkpoint, chunk_fastcdc_with_checkpoint, chunk_fixed_high_entropy,
     chunk_fixed_high_entropy_with_checkpoint, chunk_structural, chunk_structural_reader,
-    chunk_structural_reader_with_checkpoint, validate_chunk_coverage,
+    chunk_structural_reader_with_checkpoint, chunk_structural_with_checkpoint,
+    validate_chunk_coverage, validate_chunk_coverage_with_checkpoint,
 };
 use pithos_core::{DecodeLimits, PithosError};
 use proptest::prelude::*;
@@ -479,6 +480,50 @@ fn in_memory_and_fixed_paths_expose_cooperative_cancellation() {
         chunk_fixed_high_entropy_with_checkpoint(
             u64::from(2 * MIB),
             origin,
+            &ChunkingConfig::default(),
+            || Err(PithosError::Cancelled),
+        ),
+        Err(PithosError::Cancelled)
+    ));
+}
+
+#[test]
+fn sorting_and_validation_passes_expose_cooperative_cancellation() {
+    let origin = ChunkOrigin {
+        entry_id: 1,
+        object_id: 1,
+        base_offset: 0,
+    };
+    let drafts = vec![
+        LogicalChunkDraft {
+            entry_id: 1,
+            object_id: 1,
+            logical_offset: 1,
+            length: 1,
+            method: ChunkingMethod::Structural,
+        },
+        LogicalChunkDraft {
+            entry_id: 1,
+            object_id: 1,
+            logical_offset: 0,
+            length: 1,
+            method: ChunkingMethod::Structural,
+        },
+    ];
+
+    assert!(matches!(
+        assign_chunk_ids_with_checkpoint(drafts.clone(), 2, || Err(PithosError::Cancelled)),
+        Err(PithosError::Cancelled)
+    ));
+    assert!(matches!(
+        validate_chunk_coverage_with_checkpoint(&drafts, origin, 2, || Err(PithosError::Cancelled)),
+        Err(PithosError::Cancelled)
+    ));
+    assert!(matches!(
+        chunk_structural_with_checkpoint(
+            &[0_u8; 2],
+            origin,
+            &[1, 2],
             &ChunkingConfig::default(),
             || Err(PithosError::Cancelled),
         ),

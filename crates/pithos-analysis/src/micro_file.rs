@@ -211,7 +211,10 @@ impl MicroFilePackMetadata {
         }
         let mut ordered_paths = Vec::new();
         try_reserve_exact(&mut ordered_paths, paths.len())?;
-        ordered_paths.extend(paths.iter().map(Vec::as_slice));
+        for path in &paths {
+            checkpoint()?;
+            ordered_paths.push(path.as_slice());
+        }
         crate::chunking::try_sort_by_checkpoint(&mut ordered_paths, Ord::cmp, &mut checkpoint)?;
         for pair in ordered_paths.windows(2) {
             checkpoint()?;
@@ -461,7 +464,10 @@ where
 
     let mut ordered = Vec::new();
     try_reserve_exact(&mut ordered, inputs.len())?;
-    ordered.extend(inputs);
+    for input in inputs {
+        checkpoint()?;
+        ordered.push(input);
+    }
     crate::chunking::try_sort_by_checkpoint(
         &mut ordered,
         |left, right| canonical_key(left).cmp(&canonical_key(right)),

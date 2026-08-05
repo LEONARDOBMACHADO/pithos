@@ -172,7 +172,7 @@ where
             config.max_chunks,
         )?;
     }
-    validate_chunk_coverage(&chunks, origin, logical_size)?;
+    validate_chunk_coverage_with_checkpoint(&chunks, origin, logical_size, &mut checkpoint)?;
     Ok(chunks)
 }
 
@@ -249,7 +249,7 @@ where
         return Err(error);
     }
 
-    validate_chunk_coverage(&chunks, origin, logical_size)?;
+    validate_chunk_coverage_with_checkpoint(&chunks, origin, logical_size, &mut checkpoint)?;
     Ok(chunks)
 }
 
@@ -314,7 +314,7 @@ where
             .ok_or(PithosError::IntegerOverflow)?;
     }
 
-    validate_chunk_coverage(&chunks, origin, logical_size)?;
+    validate_chunk_coverage_with_checkpoint(&chunks, origin, logical_size, &mut checkpoint)?;
     Ok(chunks)
 }
 
@@ -360,7 +360,7 @@ where
         u64::try_from(boundary_ends.len()).map_err(|_| PithosError::IntegerOverflow)?,
         config.max_chunks,
     )?;
-    validate_boundary_ends(boundary_ends, logical_size)?;
+    validate_boundary_ends(boundary_ends, logical_size, &mut checkpoint)?;
 
     let mut chunks = Vec::new();
     let mut region_start = 0_u64;
@@ -413,12 +413,15 @@ where
             chunks
                 .try_reserve(subchunks.len())
                 .map_err(|_| PithosError::MemoryLimit)?;
-            chunks.extend(subchunks);
+            for chunk in subchunks {
+                checkpoint()?;
+                chunks.push(chunk);
+            }
         }
         region_start = region_end;
     }
 
-    validate_chunk_coverage(&chunks, origin, logical_size)?;
+    validate_chunk_coverage_with_checkpoint(&chunks, origin, logical_size, &mut checkpoint)?;
     Ok(chunks)
 }
 
@@ -468,7 +471,7 @@ where
         u64::try_from(boundary_ends.len()).map_err(|_| PithosError::IntegerOverflow)?,
         config.max_chunks,
     )?;
-    validate_boundary_ends(boundary_ends, logical_size)?;
+    validate_boundary_ends(boundary_ends, logical_size, &mut checkpoint)?;
 
     let mut chunks = Vec::new();
     let mut region_start = 0_u64;
@@ -518,14 +521,22 @@ where
             if limited.limit() != 0 {
                 return Err(PithosError::InvalidMetadata("short structural stream"));
             }
-            validate_chunk_coverage(&subchunks, sub_origin, region_len)?;
+            validate_chunk_coverage_with_checkpoint(
+                &subchunks,
+                sub_origin,
+                region_len,
+                &mut checkpoint,
+            )?;
             for chunk in &mut subchunks {
                 chunk.method = ChunkingMethod::Structural;
             }
             chunks
                 .try_reserve(subchunks.len())
                 .map_err(|_| PithosError::MemoryLimit)?;
-            chunks.extend(subchunks);
+            for chunk in subchunks {
+                checkpoint()?;
+                chunks.push(chunk);
+            }
         }
         region_start = region_end;
     }
@@ -535,7 +546,7 @@ where
     if reader.read(&mut trailing)? != 0 {
         return Err(PithosError::InvalidMetadata("trailing structural data"));
     }
-    validate_chunk_coverage(&chunks, origin, logical_size)?;
+    validate_chunk_coverage_with_checkpoint(&chunks, origin, logical_size, &mut checkpoint)?;
     Ok(chunks)
 }
 
@@ -545,6 +556,20 @@ pub fn validate_chunk_coverage(
     origin: ChunkOrigin,
     logical_size: u64,
 ) -> Result<()> {
+    validate_chunk_coverage_with_checkpoint(chunks, origin, logical_size, || Ok(()))
+}
+
+/// Coverage validation with a cooperative checkpoint for every descriptor.
+pub fn validate_chunk_coverage_with_checkpoint<F>(
+    chunks: &[LogicalChunkDraft],
+    origin: ChunkOrigin,
+    logical_size: u64,
+    mut checkpoint: F,
+) -> Result<()>
+where
+    F: FnMut() -> Result<()>,
+{
+    checkpoint()?;
     let expected_end = origin
         .base_offset
         .checked_add(logical_size)
@@ -569,6 +594,7 @@ pub fn validate_chunk_coverage(
 
     let mut cursor = origin.base_offset;
     for chunk in chunks {
+        checkpoint()?;
         if chunk.entry_id != origin.entry_id
             || chunk.object_id != origin.object_id
             || chunk.logical_offset != cursor
@@ -627,11 +653,13 @@ where
         },
         &mut checkpoint,
     )?;
-    if drafts.windows(2).any(|pair| {
-        (pair[0].entry_id, pair[0].object_id, pair[0].logical_offset)
+    for pair in drafts.windows(2) {
+        checkpoint()?;
+        if (pair[0].entry_id, pair[0].object_id, pair[0].logical_offset)
             == (pair[1].entry_id, pair[1].object_id, pair[1].logical_offset)
-    }) {
-        return Err(PithosError::InvalidMetadata("duplicate chunk position"));
+        {
+            return Err(PithosError::InvalidMetadata("duplicate chunk position"));
+        }
     }
 
     let mut chunks = Vec::new();
@@ -708,10 +736,14 @@ where
     }
 
     let mut scratch = Vec::new();
+    checkpoint()?;
     scratch
         .try_reserve_exact(items.len())
         .map_err(|_| PithosError::MemoryLimit)?;
-    scratch.extend_from_slice(items);
+    for item in items.iter() {
+        checkpoint()?;
+        scratch.push(*item);
+    }
 
     let mut width = 1_usize;
     while width < items.len() {
@@ -759,12 +791,20 @@ where
     Ok(())
 }
 
-fn validate_boundary_ends(boundary_ends: &[u64], logical_size: u64) -> Result<()> {
+fn validate_boundary_ends<F>(
+    boundary_ends: &[u64],
+    logical_size: u64,
+    checkpoint: &mut F,
+) -> Result<()>
+where
+    F: FnMut() -> Result<()>,
+{
     if boundary_ends.is_empty() || boundary_ends.last().copied() != Some(logical_size) {
         return Err(PithosError::InvalidMetadata("structural boundaries"));
     }
     let mut previous = 0_u64;
     for &boundary in boundary_ends {
+        checkpoint()?;
         if boundary <= previous || boundary > logical_size {
             return Err(PithosError::InvalidMetadata("structural boundaries"));
         }
