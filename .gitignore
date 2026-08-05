@@ -1,6 +1,8 @@
 # Rust build and coverage output
 /target/
 /fuzz/target/
+/fuzz/artifacts/
+/fuzz/corpus/
 /coverage/
 *.profraw
 *.lcov

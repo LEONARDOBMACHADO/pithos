@@ -12,6 +12,8 @@ libfuzzer-sys = "0.4"
 pithos-engine = { path = "../crates/pithos-engine" }
 pithos-format = { path = "../crates/pithos-format" }
 pithos-agent-api = { path = "../crates/pithos-agent-api" }
+pithos-analysis = { path = "../crates/pithos-analysis" }
+pithos-core = { path = "../crates/pithos-core" }
 serde_json = "1"
 tempfile = "3"
 
@@ -70,6 +72,13 @@ bench = false
 [[bin]]
 name = "codec_registry"
 path = "fuzz_targets/codec_registry.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "logical_chunking"
+path = "fuzz_targets/logical_chunking.rs"
 test = false
 doc = false
 bench = false
