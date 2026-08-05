@@ -1,5 +1,7 @@
 //! RAW/STORE pack, verification and transactional unpack orchestration.
 
+pub mod scheduler;
+
 use pithos_core::{CompressionProfile, DecodeLimits, PithosError, Result};
 use pithos_format::{
     ArchivePath, CentralIndexRecord, EntryKind, EntryRecord, FOOTER_LEN, Footer, GlobalHeader,
