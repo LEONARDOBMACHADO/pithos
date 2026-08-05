@@ -401,20 +401,18 @@ where
                 max_logical_bytes: region_len,
                 ..*config
             };
-            let mut subchunks = chunk_fastcdc_with_checkpoint(
+            let subchunks = chunk_fastcdc_with_checkpoint(
                 &data[start..end],
                 sub_origin,
                 &sub_config,
                 &mut checkpoint,
             )?;
-            for chunk in &mut subchunks {
-                chunk.method = ChunkingMethod::Structural;
-            }
             chunks
                 .try_reserve(subchunks.len())
                 .map_err(|_| PithosError::MemoryLimit)?;
-            for chunk in subchunks {
+            for mut chunk in subchunks {
                 checkpoint()?;
+                chunk.method = ChunkingMethod::Structural;
                 chunks.push(chunk);
             }
         }
@@ -512,7 +510,7 @@ where
                 ..*config
             };
             let mut limited = (&mut reader).take(region_len);
-            let mut subchunks = chunk_fastcdc_reader_with_checkpoint(
+            let subchunks = chunk_fastcdc_reader_with_checkpoint(
                 &mut limited,
                 sub_origin,
                 &sub_config,
@@ -527,14 +525,12 @@ where
                 region_len,
                 &mut checkpoint,
             )?;
-            for chunk in &mut subchunks {
-                chunk.method = ChunkingMethod::Structural;
-            }
             chunks
                 .try_reserve(subchunks.len())
                 .map_err(|_| PithosError::MemoryLimit)?;
-            for chunk in subchunks {
+            for mut chunk in subchunks {
                 checkpoint()?;
+                chunk.method = ChunkingMethod::Structural;
                 chunks.push(chunk);
             }
         }
