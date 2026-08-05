@@ -2770,4 +2770,20 @@ mod tests {
         .expect_err("the scanner must reject before retaining metadata over budget");
         assert!(matches!(error, PithosError::ResourceLimit("scan memory")));
     }
+
+    #[test]
+    fn compressed_hash_rejects_same_length_replacement_after_scan() {
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("changing.bin");
+        fs::write(&input, b"before").unwrap();
+        let initial_metadata = fs::metadata(&input).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::remove_file(&input).unwrap();
+        fs::write(&input, b"after!").unwrap();
+
+        let error = hash_input_file(&input, &initial_metadata, &CancellationToken::new())
+            .expect_err("a same-length replacement after scan must be rejected");
+
+        assert!(matches!(error, PithosError::InputChanged));
+    }
 }
