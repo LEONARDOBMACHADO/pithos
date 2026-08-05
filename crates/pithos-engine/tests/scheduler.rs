@@ -21,10 +21,16 @@ fn scheduler_honors_dag_priority_and_returns_deterministic_spool_order() {
     let dependent_log = Arc::clone(&execution);
     let high_log = Arc::clone(&execution);
     let tasks = vec![
-        ScheduledTask::new(30, JobPriority::Benchmark, vec![], estimate(16), move |_| {
-            low_log.lock().unwrap().push(30);
-            Ok(b"low".to_vec())
-        }),
+        ScheduledTask::new(
+            30,
+            JobPriority::Benchmark,
+            vec![],
+            estimate(16),
+            move |_| {
+                low_log.lock().unwrap().push(30);
+                Ok(b"low".to_vec())
+            },
+        ),
         ScheduledTask::new(
             20,
             JobPriority::InteractiveRead,
@@ -158,13 +164,9 @@ fn scheduler_queue_capacity_is_bounded_from_worker_count() {
 fn scheduler_rejects_payload_larger_than_reserved_output_bound() {
     let directory = tempfile::tempdir().unwrap();
     let config = SchedulerConfig::new(1, 8, directory.path()).unwrap();
-    let task = ScheduledTask::new(
-        1,
-        JobPriority::PackForeground,
-        vec![],
-        estimate(1),
-        |_| Ok(vec![1, 2]),
-    );
+    let task = ScheduledTask::new(1, JobPriority::PackForeground, vec![], estimate(1), |_| {
+        Ok(vec![1, 2])
+    });
     assert!(matches!(
         execute_scheduled(vec![task], config, CancellationToken::new()),
         Err(PithosError::ResourceLimit(_))

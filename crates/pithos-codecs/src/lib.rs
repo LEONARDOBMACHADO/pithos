@@ -11,6 +11,18 @@ pub enum CodecId {
     Lzma2 = 3,
 }
 
+impl CodecId {
+    pub const fn from_u16(value: u16) -> Option<Self> {
+        match value {
+            0 => Some(Self::Store),
+            1 => Some(Self::Zstd),
+            2 => Some(Self::Brotli),
+            3 => Some(Self::Lzma2),
+            _ => None,
+        }
+    }
+}
+
 /// Fixed implementation version recorded by a future codec registry.
 pub type CodecVersion = u16;
 

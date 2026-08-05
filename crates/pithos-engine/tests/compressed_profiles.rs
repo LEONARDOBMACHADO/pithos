@@ -8,9 +8,16 @@ use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 
 fn write_fixture(root: &std::path::Path) -> Vec<std::path::PathBuf> {
-    let paths = [root.join("alpha.txt"), root.join("beta.txt"), root.join("gamma.txt")];
+    let paths = [
+        root.join("alpha.txt"),
+        root.join("beta.txt"),
+        root.join("gamma.txt"),
+    ];
     for (index, path) in paths.iter().enumerate() {
-        let body = format!("shared-prefix-{index}-{}", "compressible-pattern-".repeat(512));
+        let body = format!(
+            "shared-prefix-{index}-{}",
+            "compressible-pattern-".repeat(512)
+        );
         fs::write(path, body).unwrap();
     }
     paths.into_iter().collect()
@@ -37,11 +44,8 @@ fn read_phase_two_sections(path: &std::path::Path) -> (CodecRegistry, Vec<GroupT
         file.read_exact(&mut bytes).unwrap();
         bytes
     };
-    let registry = CodecRegistry::decode(
-        &read_section(SectionType::CodecRegistry, &mut file),
-        32,
-    )
-    .unwrap();
+    let registry =
+        CodecRegistry::decode(&read_section(SectionType::CodecRegistry, &mut file), 32).unwrap();
     let groups = serde_json::from_slice(&read_section(SectionType::GroupTable, &mut file)).unwrap();
     (registry, groups)
 }
@@ -52,7 +56,12 @@ fn balanced_roundtrip_uses_registry_and_one_logical_solid_group() {
     let inputs = write_fixture(temp.path());
     let expected = inputs
         .iter()
-        .map(|path| (path.file_name().unwrap().to_owned(), fs::read(path).unwrap()))
+        .map(|path| {
+            (
+                path.file_name().unwrap().to_owned(),
+                fs::read(path).unwrap(),
+            )
+        })
         .collect::<Vec<_>>();
     let archive = temp.path().join("balanced.pithos");
     pack(PackRequest {

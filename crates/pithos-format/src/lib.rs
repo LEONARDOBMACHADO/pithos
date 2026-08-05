@@ -15,6 +15,7 @@ pub const GROUP_RECORD_LEN: usize = 48;
 pub const CODEC_REGISTRY_RECORD_LEN: usize = 16;
 pub const CODEC_FLAG_REQUIRED: u32 = 1;
 pub const REQUIRED_RAW_SECTIONS: u32 = 6;
+pub const REQUIRED_COMPRESSED_SECTIONS: u32 = 7;
 
 pub const MAJOR_VERSION: u16 = 0;
 pub const MINOR_VERSION: u16 = 1;

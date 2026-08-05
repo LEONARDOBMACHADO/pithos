@@ -2,14 +2,17 @@
 
 pub mod scheduler;
 
+use pithos_codecs::{BrotliCodec, Codec, CodecConfig, CodecId, Lzma2Codec, StoreCodec, ZstdCodec};
 use pithos_core::{CompressionProfile, DecodeLimits, PithosError, Result};
 use pithos_format::{
-    ArchivePath, CentralIndexRecord, EntryKind, EntryRecord, FOOTER_LEN, Footer, GlobalHeader,
-    GroupRecord, GroupTableRecord, HEADER_LEN, IntegrityRecord, LinkComponent, LinkTarget,
+    ArchivePath, CODEC_FLAG_REQUIRED, CentralIndexRecord, CodecRegistry, CodecRegistryRecord,
+    EntryKind, EntryRecord, FOOTER_LEN, Footer, GlobalHeader, GroupRecord, GroupTableRecord,
+    HEADER_LEN, IntegrityRecord, LinkComponent, LinkTarget, REQUIRED_COMPRESSED_SECTIONS,
     REQUIRED_RAW_SECTIONS, RestoreMapRecord, SECTION_ENTRY_LEN, SectionDirectoryRecord,
     SectionType,
 };
 use pithos_io::{atomic_commit, create_atomic_spool};
+use pithos_planner::{CandidateCost, SolidGroupPlan, plan_solid_groups};
 use serde::{Serialize, de::DeserializeOwned};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
@@ -179,7 +182,7 @@ pub fn pack_with_limits_and_control(
 ) -> Result<()> {
     cancellation.checkpoint()?;
     if request.profile != CompressionProfile::Raw {
-        return Err(PithosError::UnsupportedCodec);
+        return pack_compressed_with_limits(request, pack_limits, cancellation);
     }
     if request.inputs.is_empty() {
         return Err(PithosError::InvalidMetadata("nenhuma entrada"));
@@ -484,6 +487,599 @@ pub fn pack_with_limits_and_control(
     Ok(())
 }
 
+#[derive(Debug, Clone)]
+struct CompressedSource {
+    entry_id: u64,
+    path: PathBuf,
+    size: u64,
+    hash: [u8; 32],
+}
+
+fn pack_compressed_with_limits(
+    request: PackRequest,
+    pack_limits: &PackLimits,
+    cancellation: &CancellationToken,
+) -> Result<()> {
+    if request.inputs.is_empty() {
+        return Err(PithosError::InvalidMetadata("nenhuma entrada"));
+    }
+    if path_entry_exists(&request.output)? {
+        return Err(PithosError::OutputExists);
+    }
+    if pack_limits.max_temp_bytes == 0
+        || pack_limits.max_output_bytes == 0
+        || pack_limits.max_metadata_bytes == 0
+        || pack_limits.max_entries == 0
+    {
+        return Err(PithosError::ResourceLimit("pack budget"));
+    }
+
+    let defaults = DecodeLimits::default();
+    let decode_limits = DecodeLimits {
+        max_entries: pack_limits.max_entries.min(defaults.max_entries),
+        max_groups: pack_limits.max_entries.min(defaults.max_groups),
+        max_chunks: pack_limits.max_entries.min(defaults.max_chunks),
+        max_original_bytes: pack_limits.max_input_bytes,
+        max_group_output: defaults.max_group_output,
+        max_metadata_bytes: pack_limits
+            .max_metadata_bytes
+            .min(defaults.max_metadata_bytes),
+        ..defaults
+    };
+    let scanned = scan_inputs(&request.inputs, &decode_limits, cancellation)?;
+    let mut entries = Vec::with_capacity(scanned.len());
+    let mut sources = Vec::<CompressedSource>::new();
+    let mut hardlinks: HashMap<same_file::Handle, (u64, u64, [u8; 32])> = HashMap::new();
+    let mut original_total_size = 0_u64;
+
+    for scanned_entry in scanned {
+        cancellation.checkpoint()?;
+        let entry_id = entries.len() as u64;
+        let modified_ns = modified_ns(&scanned_entry.metadata);
+        let mode = metadata_mode(&scanned_entry.metadata);
+        let (size, hash, kind) = match scanned_entry.kind {
+            ScannedKind::Directory => (
+                0,
+                *blake3::hash(b"directory").as_bytes(),
+                EntryKind::Directory,
+            ),
+            ScannedKind::Symlink {
+                target,
+                target_is_dir,
+            } => {
+                let serialized = serialize(&target)?;
+                (
+                    serialized.len() as u64,
+                    *blake3::hash(&serialized).as_bytes(),
+                    EntryKind::Symlink {
+                        target,
+                        target_is_dir,
+                    },
+                )
+            }
+            ScannedKind::File => {
+                let expected_size = scanned_entry.metadata.len();
+                original_total_size = original_total_size
+                    .checked_add(expected_size)
+                    .ok_or(PithosError::IntegerOverflow)?;
+                if original_total_size > decode_limits.max_original_bytes {
+                    return Err(PithosError::ResourceLimit("tamanho original"));
+                }
+                let identity = file_identity(&scanned_entry.source);
+                if let Some((target_entry_id, target_size, target_hash)) = identity
+                    .as_ref()
+                    .and_then(|key| hardlinks.get(key))
+                    .copied()
+                {
+                    (
+                        target_size,
+                        target_hash,
+                        EntryKind::Hardlink { target_entry_id },
+                    )
+                } else {
+                    if expected_size > decode_limits.max_group_output {
+                        return Err(PithosError::ResourceLimit("tamanho do grupo"));
+                    }
+                    let (actual_size, file_hash) = hash_input_file(
+                        &scanned_entry.source,
+                        &scanned_entry.metadata,
+                        cancellation,
+                    )?;
+                    sources.push(CompressedSource {
+                        entry_id,
+                        path: scanned_entry.source.clone(),
+                        size: actual_size,
+                        hash: file_hash,
+                    });
+                    if let Some(identity) = identity {
+                        hardlinks.insert(identity, (entry_id, actual_size, file_hash));
+                    }
+                    (
+                        actual_size,
+                        file_hash,
+                        EntryKind::File { group_id: u64::MAX },
+                    )
+                }
+            }
+        };
+        entries.push(EntryRecord {
+            entry_id,
+            path: scanned_entry.archive_path,
+            size,
+            modified_ns,
+            mode,
+            blake3: hash,
+            kind,
+        });
+    }
+
+    let lengths = sources.iter().map(|source| source.size).collect::<Vec<_>>();
+    let plans = plan_solid_groups(request.profile, &lengths)?;
+    let mut restore_map = Vec::with_capacity(sources.len());
+    for (group_id, plan) in plans.iter().enumerate() {
+        let members = group_members(&sources, plan)?;
+        let mut group_offset = 0_u64;
+        for source in members {
+            entries[source.entry_id as usize].kind = EntryKind::File {
+                group_id: group_id as u64,
+            };
+            restore_map.push(RestoreMapRecord {
+                entry_id: source.entry_id,
+                original_offset: 0,
+                length: source.size,
+                group_id: group_id as u64,
+                group_offset,
+            });
+            group_offset = group_offset
+                .checked_add(source.size)
+                .ok_or(PithosError::IntegerOverflow)?;
+        }
+        if group_offset != plan.uncompressed_len {
+            return Err(PithosError::InvalidMetadata("solid group plan length"));
+        }
+    }
+
+    let candidates = profile_codecs(request.profile);
+    let parent = request.output.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
+    let workers = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1)
+        .min(8);
+    let memory_budget = pack_limits.max_temp_bytes.clamp(1, 2 * 1024 * 1024 * 1024);
+    let scheduler_config = scheduler::SchedulerConfig::new(workers, memory_budget, parent)?;
+    let scheduler_cancellation = scheduler::CancellationToken::new();
+    let mut tasks = Vec::with_capacity(plans.len());
+    for (group_id, plan) in plans.iter().enumerate() {
+        let members = group_members(&sources, plan)?.to_vec();
+        let output_bound = plan
+            .uncompressed_len
+            .checked_add(1024 * 1024 + 2)
+            .ok_or(PithosError::IntegerOverflow)?;
+        let codec_memory = candidates.iter().try_fold(0_u64, |maximum, codec_id| {
+            let config = CodecConfig::deterministic_default(*codec_id);
+            Ok::<u64, PithosError>(
+                maximum.max(codec_for_id(*codec_id).memory_bound(plan.uncompressed_len, &config)?),
+            )
+        })?;
+        let outer_cancellation = cancellation.clone();
+        let task_candidates = candidates.clone();
+        tasks.push(scheduler::ScheduledTask::new(
+            group_id as u64,
+            scheduler::JobPriority::PackForeground,
+            Vec::new(),
+            scheduler::ResourceEstimate {
+                input_bytes: 0,
+                scratch_bytes: codec_memory,
+                output_bound,
+            },
+            move |task_cancellation| {
+                encode_solid_group(
+                    &members,
+                    &task_candidates,
+                    &outer_cancellation,
+                    task_cancellation,
+                )
+            },
+        ));
+    }
+    let encoded_groups =
+        scheduler::execute_scheduled(tasks, scheduler_config, scheduler_cancellation)?;
+    cancellation.checkpoint()?;
+
+    let directory_length = u64::from(REQUIRED_COMPRESSED_SECTIONS)
+        .checked_mul(SECTION_ENTRY_LEN as u64)
+        .ok_or(PithosError::IntegerOverflow)?;
+    let payload_start = (HEADER_LEN as u64)
+        .checked_add(directory_length)
+        .ok_or(PithosError::IntegerOverflow)?;
+    let mut spool = create_atomic_spool(parent)?;
+    spool.seek(SeekFrom::Start(payload_start))?;
+    let mut groups = Vec::with_capacity(encoded_groups.len());
+    let mut used_codecs = std::collections::BTreeSet::new();
+    let mut payload_crc = 0_u32;
+    for encoded in &encoded_groups {
+        cancellation.checkpoint()?;
+        let envelope = encoded.read_all()?;
+        if envelope.len() < 2 {
+            return Err(PithosError::InvalidMetadata("encoded group envelope"));
+        }
+        let codec_id_raw = u16::from_le_bytes([envelope[0], envelope[1]]);
+        let codec_id = CodecId::from_u16(codec_id_raw).ok_or(PithosError::UnsupportedCodec)?;
+        let payload = &envelope[2..];
+        let payload_offset = spool.stream_position()?;
+        spool.write_all(payload)?;
+        let group_crc = crc32c::crc32c(payload);
+        payload_crc = crc32c::crc32c_append(payload_crc, payload);
+        let plan = plans
+            .get(encoded.task_id as usize)
+            .ok_or(PithosError::InvalidMetadata("encoded group ID"))?;
+        let compressed_len =
+            u64::try_from(payload.len()).map_err(|_| PithosError::IntegerOverflow)?;
+        groups.push(GroupTableRecord {
+            group: GroupRecord {
+                version: 1,
+                flags: 0,
+                group_id: encoded.task_id,
+                codec_chain_id: u32::from(codec_id as u16) + 1,
+                chunk_count: u32::try_from(plan.item_count)
+                    .map_err(|_| PithosError::IntegerOverflow)?,
+                uncompressed_len: plan.uncompressed_len,
+                compressed_len,
+                descriptor_len: 0,
+                payload_crc32c: group_crc,
+            },
+            payload_offset,
+        });
+        used_codecs.insert(codec_id_raw);
+    }
+    let payload_end = spool.stream_position()?;
+    let payload_length = payload_end
+        .checked_sub(payload_start)
+        .ok_or(PithosError::IntegerOverflow)?;
+
+    let registry = CodecRegistry {
+        records: used_codecs
+            .into_iter()
+            .map(|codec_id| {
+                let id = CodecId::from_u16(codec_id).ok_or(PithosError::UnsupportedCodec)?;
+                Ok(CodecRegistryRecord {
+                    chain_id: u32::from(codec_id) + 1,
+                    codec_id,
+                    codec_version: codec_for_id(id).version(),
+                    level: CodecConfig::deterministic_default(id).level,
+                    flags: CODEC_FLAG_REQUIRED,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?,
+    };
+    let registry_bytes = registry.encode()?;
+    let central_index = entries
+        .iter()
+        .map(|entry| CentralIndexRecord {
+            path: entry.path.clone(),
+            entry_id: entry.entry_id,
+            group_id: match entry.kind {
+                EntryKind::File { group_id } => Some(group_id),
+                _ => None,
+            },
+        })
+        .collect::<Vec<_>>();
+    let integrity = entries
+        .iter()
+        .map(|entry| IntegrityRecord {
+            entry_id: entry.entry_id,
+            blake3: entry.blake3,
+        })
+        .collect::<Vec<_>>();
+    let entry_bytes = serialize(&entries)?;
+    let group_bytes = serialize(&groups)?;
+    let restore_bytes = serialize(&restore_map)?;
+    let index_bytes = serialize(&central_index)?;
+    let integrity_bytes = serialize(&integrity)?;
+    let metadata_sections = [
+        &registry_bytes,
+        &entry_bytes,
+        &group_bytes,
+        &restore_bytes,
+        &index_bytes,
+        &integrity_bytes,
+    ];
+    let metadata_total = metadata_sections.iter().try_fold(0_u64, |total, bytes| {
+        let length = u64::try_from(bytes.len()).map_err(|_| PithosError::IntegerOverflow)?;
+        if length > decode_limits.max_metadata_bytes {
+            return Err(PithosError::ResourceLimit("seção de metadados"));
+        }
+        total
+            .checked_add(length)
+            .ok_or(PithosError::IntegerOverflow)
+    })?;
+    if metadata_total > decode_limits.max_metadata_bytes {
+        return Err(PithosError::ResourceLimit("aggregate metadata"));
+    }
+    let expected_archive_length = payload_end
+        .checked_add(metadata_total)
+        .and_then(|length| length.checked_add(FOOTER_LEN as u64))
+        .ok_or(PithosError::IntegerOverflow)?;
+    if expected_archive_length > pack_limits.max_output_bytes {
+        return Err(PithosError::ResourceLimit("archive output"));
+    }
+    let encoded_temp = encoded_groups.iter().try_fold(0_u64, |total, group| {
+        total
+            .checked_add(group.len)
+            .ok_or(PithosError::IntegerOverflow)
+    })?;
+    if encoded_temp
+        .checked_add(expected_archive_length)
+        .is_none_or(|peak| peak > pack_limits.max_temp_bytes)
+    {
+        return Err(PithosError::TemporarySpaceLimit);
+    }
+
+    let mut sections = Vec::with_capacity(REQUIRED_COMPRESSED_SECTIONS as usize);
+    sections.push(write_section(
+        &mut spool,
+        SectionType::CodecRegistry,
+        &registry_bytes,
+    )?);
+    sections.push(write_section(
+        &mut spool,
+        SectionType::EntryTable,
+        &entry_bytes,
+    )?);
+    sections.push(write_section(
+        &mut spool,
+        SectionType::GroupTable,
+        &group_bytes,
+    )?);
+    sections.push(SectionDirectoryRecord {
+        section_type: SectionType::PayloadArea as u16,
+        section_version: 1,
+        flags: 0,
+        offset: payload_start,
+        length: payload_length,
+        crc32c: payload_crc,
+        reserved: 0,
+    });
+    sections.push(write_section(
+        &mut spool,
+        SectionType::RestoreMap,
+        &restore_bytes,
+    )?);
+    sections.push(write_section(
+        &mut spool,
+        SectionType::CentralIndex,
+        &index_bytes,
+    )?);
+    sections.push(write_section(
+        &mut spool,
+        SectionType::IntegrityTree,
+        &integrity_bytes,
+    )?);
+    sections.sort_by_key(|section| section.section_type);
+
+    let footer_offset = spool.stream_position()?;
+    let mut identity_hasher = blake3::Hasher::new();
+    for bytes in metadata_sections {
+        identity_hasher.update(bytes);
+    }
+    let identity_hash = identity_hasher.finalize();
+    let mut archive_id = [0_u8; 16];
+    archive_id.copy_from_slice(&identity_hash.as_bytes()[..16]);
+    let mut header = GlobalHeader::new(archive_id);
+    header.original_total_size = original_total_size;
+    header.entry_count = entries.len() as u64;
+    header.logical_chunk_count = restore_map.len() as u64;
+    header.group_count = groups.len() as u64;
+    header.footer_offset = footer_offset;
+    header.section_count = REQUIRED_COMPRESSED_SECTIONS;
+    let directory_bytes = sections
+        .iter()
+        .flat_map(SectionDirectoryRecord::encode)
+        .collect::<Vec<_>>();
+    spool.seek(SeekFrom::Start(0))?;
+    spool.write_all(&header.encode())?;
+    spool.write_all(&directory_bytes)?;
+    spool.flush()?;
+    let (_, root) = digest_range(spool.as_file_mut(), 0, footer_offset, cancellation)?;
+    let archive_length = footer_offset
+        .checked_add(FOOTER_LEN as u64)
+        .ok_or(PithosError::IntegerOverflow)?;
+    let footer = Footer {
+        archive_length,
+        blake3_root: root,
+        directory_crc32c: crc32c::crc32c(&directory_bytes),
+        version: 1,
+    };
+    spool.seek(SeekFrom::Start(footer_offset))?;
+    spool.write_all(&footer.encode())?;
+    spool.flush()?;
+    spool.as_file().sync_all()?;
+    verify_open_file(spool.as_file_mut(), &decode_limits, cancellation)?;
+    cancellation.checkpoint()?;
+    atomic_commit(spool, &request.output)?;
+    info!(?request.output, "compressed archive committed");
+    Ok(())
+}
+
+fn group_members<'a>(
+    sources: &'a [CompressedSource],
+    plan: &SolidGroupPlan,
+) -> Result<&'a [CompressedSource]> {
+    let end = plan
+        .first_item
+        .checked_add(plan.item_count)
+        .ok_or(PithosError::IntegerOverflow)?;
+    sources
+        .get(plan.first_item..end)
+        .ok_or(PithosError::InvalidMetadata("solid group member range"))
+}
+
+fn profile_codecs(profile: CompressionProfile) -> Vec<CodecId> {
+    match profile {
+        CompressionProfile::Raw => vec![CodecId::Store],
+        CompressionProfile::Stream | CompressionProfile::Random => {
+            vec![CodecId::Store, CodecId::Zstd]
+        }
+        CompressionProfile::Balanced | CompressionProfile::ArchiveMax => vec![
+            CodecId::Store,
+            CodecId::Zstd,
+            CodecId::Brotli,
+            CodecId::Lzma2,
+        ],
+    }
+}
+
+fn codec_for_id(codec_id: CodecId) -> &'static dyn Codec {
+    static STORE: StoreCodec = StoreCodec;
+    static ZSTD: ZstdCodec = ZstdCodec;
+    static BROTLI: BrotliCodec = BrotliCodec;
+    static LZMA2: Lzma2Codec = Lzma2Codec;
+    match codec_id {
+        CodecId::Store => &STORE,
+        CodecId::Zstd => &ZSTD,
+        CodecId::Brotli => &BROTLI,
+        CodecId::Lzma2 => &LZMA2,
+    }
+}
+
+fn encode_solid_group(
+    members: &[CompressedSource],
+    candidates: &[CodecId],
+    cancellation: &CancellationToken,
+    task_cancellation: &scheduler::CancellationToken,
+) -> Result<Vec<u8>> {
+    let input_length = members.iter().try_fold(0_u64, |total, source| {
+        total
+            .checked_add(source.size)
+            .ok_or(PithosError::IntegerOverflow)
+    })?;
+    let capacity = usize::try_from(input_length).map_err(|_| PithosError::MemoryLimit)?;
+    let mut input = Vec::with_capacity(capacity);
+    for source in members {
+        cancellation.checkpoint()?;
+        task_cancellation.checkpoint()?;
+        read_verified_source(source, &mut input, cancellation, task_cancellation)?;
+    }
+
+    let mut best: Option<(CodecId, CandidateCost, Vec<u8>)> = None;
+    for codec_id in candidates {
+        cancellation.checkpoint()?;
+        task_cancellation.checkpoint()?;
+        let codec = codec_for_id(*codec_id);
+        let config = CodecConfig::deterministic_default(*codec_id);
+        let mut encoded = Vec::new();
+        let stats = codec.encode(&input, &config, &mut encoded)?;
+        let cost = CandidateCost {
+            payload: stats.output_bytes,
+            codec_descriptor: 16,
+            group_descriptor: 48,
+            index_delta: 0,
+            integrity: 4,
+            padding: 0,
+        };
+        let replace = match &best {
+            None => true,
+            Some((best_id, best_cost, _)) => {
+                let total = cost.total()?;
+                let best_total = best_cost.total()?;
+                total < best_total
+                    || (total == best_total && (*codec_id as u16) < (*best_id as u16))
+            }
+        };
+        if replace {
+            best = Some((*codec_id, cost, encoded));
+        }
+    }
+    let (codec_id, _, payload) = best.ok_or(PithosError::UnsupportedCodec)?;
+    let mut envelope = Vec::with_capacity(payload.len() + 2);
+    envelope.extend_from_slice(&(codec_id as u16).to_le_bytes());
+    envelope.extend_from_slice(&payload);
+    Ok(envelope)
+}
+
+fn hash_input_file(
+    path: &Path,
+    initial_metadata: &fs::Metadata,
+    cancellation: &CancellationToken,
+) -> Result<(u64, [u8; 32])> {
+    let source = CompressedSource {
+        entry_id: 0,
+        path: path.to_path_buf(),
+        size: initial_metadata.len(),
+        hash: [0; 32],
+    };
+    let task_cancellation = scheduler::CancellationToken::new();
+    let mut bytes = Vec::new();
+    read_source_bytes(&source, &mut bytes, cancellation, &task_cancellation, false)?;
+    Ok((
+        u64::try_from(bytes.len()).map_err(|_| PithosError::IntegerOverflow)?,
+        *blake3::hash(&bytes).as_bytes(),
+    ))
+}
+
+fn read_verified_source(
+    source: &CompressedSource,
+    output: &mut Vec<u8>,
+    cancellation: &CancellationToken,
+    task_cancellation: &scheduler::CancellationToken,
+) -> Result<()> {
+    let start = output.len();
+    read_source_bytes(source, output, cancellation, task_cancellation, true)?;
+    if blake3::hash(&output[start..]).as_bytes() != &source.hash {
+        return Err(PithosError::InputChanged);
+    }
+    Ok(())
+}
+
+fn read_source_bytes(
+    source: &CompressedSource,
+    output: &mut Vec<u8>,
+    cancellation: &CancellationToken,
+    task_cancellation: &scheduler::CancellationToken,
+    verify_hash: bool,
+) -> Result<()> {
+    let initial = fs::metadata(&source.path)?;
+    let expected_modified = initial.modified().ok();
+    let expected_identity = file_identity(&source.path);
+    if initial.len() != source.size {
+        return Err(PithosError::InputChanged);
+    }
+    let start = output.len();
+    let mut file = File::open(&source.path)?;
+    let mut buffer = [0_u8; IO_BUFFER_SIZE];
+    loop {
+        cancellation.checkpoint()?;
+        task_cancellation.checkpoint()?;
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        output.extend_from_slice(&buffer[..read]);
+        let written = output
+            .len()
+            .checked_sub(start)
+            .ok_or(PithosError::IntegerOverflow)?;
+        if u64::try_from(written).map_err(|_| PithosError::IntegerOverflow)? > source.size {
+            return Err(PithosError::InputChanged);
+        }
+    }
+    let final_metadata = fs::metadata(&source.path)?;
+    let written = output
+        .len()
+        .checked_sub(start)
+        .ok_or(PithosError::IntegerOverflow)?;
+    if u64::try_from(written).map_err(|_| PithosError::IntegerOverflow)? != source.size
+        || final_metadata.len() != source.size
+        || final_metadata.modified().ok() != expected_modified
+        || file_identity(&source.path) != expected_identity
+        || (verify_hash && blake3::hash(&output[start..]).as_bytes() != &source.hash)
+    {
+        return Err(PithosError::InputChanged);
+    }
+    Ok(())
+}
+
 pub fn verify(archive: &Path) -> Result<VerificationReport> {
     verify_with_limits(archive, &DecodeLimits::default())
 }
@@ -619,6 +1215,7 @@ pub fn extract_with_control_and_limits(
                 .groups
                 .get(group_id as usize)
                 .ok_or(PithosError::InvalidMetadata("entry group"))?;
+            let restore = restore_for_entry(&parsed, source.entry_id)?;
             if source.size > max_output_bytes {
                 return Err(PithosError::ResourceLimit("extract output bytes"));
             }
@@ -631,14 +1228,16 @@ pub fn extract_with_control_and_limits(
             }
             let parent = destination.parent().unwrap_or_else(|| Path::new("."));
             let mut spool = create_atomic_spool(parent)?;
-            let (crc, hash) = copy_range(
+            let decoded = decode_group(
                 &mut archive,
-                group.payload_offset,
-                group.group.compressed_len,
-                &mut spool,
+                group,
+                parsed.codec_registry.as_ref(),
+                limits,
                 cancellation,
             )?;
-            if crc != group.group.payload_crc32c || hash != source.blake3 {
+            let bytes = restored_slice(&decoded, restore, 0, restore.length)?;
+            spool.write_all(bytes)?;
+            if blake3::hash(bytes).as_bytes() != &source.blake3 {
                 return Err(PithosError::HashMismatch);
             }
             cancellation.checkpoint()?;
@@ -688,14 +1287,17 @@ pub fn extract_to_writer_with_control<W: Write>(
         .groups
         .get(group_id as usize)
         .ok_or(PithosError::InvalidMetadata("entry group"))?;
-    let (crc, hash) = copy_range(
+    let restore = restore_for_entry(&parsed, source.entry_id)?;
+    let decoded = decode_group(
         &mut source_archive,
-        group.payload_offset,
-        group.group.compressed_len,
-        output,
+        group,
+        parsed.codec_registry.as_ref(),
+        limits,
         cancellation,
     )?;
-    if crc != group.group.payload_crc32c || hash != source.blake3 {
+    let bytes = restored_slice(&decoded, restore, 0, restore.length)?;
+    output.write_all(bytes)?;
+    if blake3::hash(bytes).as_bytes() != &source.blake3 {
         return Err(PithosError::HashMismatch);
     }
     Ok(extract_report(selected, source.size))
@@ -734,18 +1336,21 @@ pub fn read_range_to_writer_with_control<W: Write>(
         .groups
         .get(group_id as usize)
         .ok_or(PithosError::InvalidMetadata("entry group"))?;
-    let (crc, entry_hash, range_hash) = copy_verified_subrange(
+    let restore = restore_for_entry(&parsed, source.entry_id)?;
+    let decoded = decode_group(
         &mut archive,
-        group.payload_offset,
-        group.group.compressed_len,
-        request.offset,
-        request.length,
-        output,
+        group,
+        parsed.codec_registry.as_ref(),
+        limits,
         cancellation,
     )?;
-    if crc != group.group.payload_crc32c || entry_hash != source.blake3 {
+    let entry_bytes = restored_slice(&decoded, restore, 0, restore.length)?;
+    if blake3::hash(entry_bytes).as_bytes() != &source.blake3 {
         return Err(PithosError::HashMismatch);
     }
+    let range_bytes = restored_slice(&decoded, restore, request.offset, request.length)?;
+    output.write_all(range_bytes)?;
+    let range_hash = *blake3::hash(range_bytes).as_bytes();
     Ok(ReadRangeReport {
         path: selected.path.to_path_buf()?.to_string_lossy().into_owned(),
         offset: request.offset,
@@ -818,6 +1423,7 @@ pub fn unpack_with_control_and_temp_limit(
         let group = groups
             .get(&group_id)
             .ok_or(PithosError::InvalidMetadata("grupo ausente"))?;
+        let restore = restore_for_entry(&parsed, entry.entry_id)?;
         let destination = staging.path().join(entry.path.to_path_buf()?);
         if let Some(parent) = destination.parent() {
             fs::create_dir_all(parent)?;
@@ -826,14 +1432,16 @@ pub fn unpack_with_control_and_temp_limit(
             .write(true)
             .create_new(true)
             .open(&destination)?;
-        let (crc, hash) = copy_range(
+        let decoded = decode_group(
             &mut archive,
-            group.payload_offset,
-            group.group.compressed_len,
-            &mut output,
+            group,
+            parsed.codec_registry.as_ref(),
+            limits,
             cancellation,
         )?;
-        if crc != group.group.payload_crc32c || hash != entry.blake3 {
+        let bytes = restored_slice(&decoded, restore, 0, restore.length)?;
+        output.write_all(bytes)?;
+        if blake3::hash(bytes).as_bytes() != &entry.blake3 {
             return Err(PithosError::HashMismatch);
         }
         output.sync_all()?;
@@ -894,6 +1502,8 @@ pub fn unpack_with_control_and_temp_limit(
 struct ParsedArchive {
     entries: Vec<EntryRecord>,
     groups: Vec<GroupTableRecord>,
+    restore_map: Vec<RestoreMapRecord>,
+    codec_registry: Option<CodecRegistry>,
     report: VerificationReport,
     payload_section: SectionDirectoryRecord,
     footer_offset: u64,
@@ -960,7 +1570,8 @@ fn read_catalog(
         }
         let section_type = SectionType::from_u16(record.section_type)
             .ok_or(PithosError::UnsupportedContainerVersion)?;
-        if !RAW_SECTION_TYPES.contains(&section_type) {
+        if !RAW_SECTION_TYPES.contains(&section_type) && section_type != SectionType::CodecRegistry
+        {
             return Err(PithosError::UnsupportedContainerVersion);
         }
         if section_map.insert(record.section_type, record).is_some() {
@@ -980,20 +1591,32 @@ fn read_catalog(
     let index_section = required_section(&section_map, SectionType::CentralIndex)?;
     let integrity_section = required_section(&section_map, SectionType::IntegrityTree)?;
     let payload_section = required_section(&section_map, SectionType::PayloadArea)?;
+    let codec_section = section_map.get(&(SectionType::CodecRegistry as u16));
 
-    let aggregate_metadata = [
+    if header.section_count == REQUIRED_RAW_SECTIONS && codec_section.is_some()
+        || header.section_count == REQUIRED_COMPRESSED_SECTIONS && codec_section.is_none()
+    {
+        return Err(PithosError::InvalidMetadata("codec registry section count"));
+    }
+
+    let mut metadata_sections = vec![
         entry_section,
         group_section,
         restore_section,
         index_section,
         integrity_section,
-    ]
-    .iter()
-    .try_fold(directory_length, |total, section| {
-        total
-            .checked_add(section.length)
-            .ok_or(PithosError::IntegerOverflow)
-    })?;
+    ];
+    if let Some(section) = codec_section {
+        metadata_sections.push(section);
+    }
+    let aggregate_metadata =
+        metadata_sections
+            .iter()
+            .try_fold(directory_length, |total, section| {
+                total
+                    .checked_add(section.length)
+                    .ok_or(PithosError::IntegerOverflow)
+            })?;
     if aggregate_metadata > limits.max_metadata_bytes {
         return Err(PithosError::ResourceLimit("aggregate metadata"));
     }
@@ -1003,10 +1626,15 @@ fn read_catalog(
     let restore_map: Vec<RestoreMapRecord> = read_json_section(file, restore_section, limits)?;
     let central_index: Vec<CentralIndexRecord> = read_json_section(file, index_section, limits)?;
     let integrity: Vec<IntegrityRecord> = read_json_section(file, integrity_section, limits)?;
+    let codec_registry = if let Some(section) = codec_section {
+        let bytes = read_checked_section(file, section, limits)?;
+        Some(CodecRegistry::decode(&bytes, 32)?)
+    } else {
+        None
+    };
     if entries.len() as u64 != header.entry_count
         || groups.len() as u64 != header.group_count
-        || groups.len() as u64 != header.logical_chunk_count
-        || restore_map.len() != groups.len()
+        || restore_map.len() as u64 != header.logical_chunk_count
         || central_index.len() != entries.len()
         || integrity.len() != entries.len()
     {
@@ -1019,7 +1647,6 @@ fn read_catalog(
     let mut directory_count = 0_u64;
     let mut hardlink_count = 0_u64;
     let mut symlink_count = 0_u64;
-    let mut group_owners = vec![None; groups.len()];
     for (position, entry) in entries.iter().enumerate() {
         if entry.entry_id != position as u64 {
             return Err(PithosError::InvalidMetadata("entry id"));
@@ -1035,14 +1662,8 @@ fn read_catalog(
                 let group = groups
                     .get(*group_id as usize)
                     .ok_or(PithosError::InvalidMetadata("entry group"))?;
-                if group.group.group_id != *group_id || group.group.uncompressed_len != entry.size {
-                    return Err(PithosError::InvalidMetadata("entry group size"));
-                }
-                let owner = group_owners
-                    .get_mut(*group_id as usize)
-                    .ok_or(PithosError::InvalidMetadata("entry group"))?;
-                if owner.replace(position).is_some() {
-                    return Err(PithosError::InvalidMetadata("duplicate group owner"));
+                if group.group.group_id != *group_id {
+                    return Err(PithosError::InvalidMetadata("entry group ID"));
                 }
             }
             EntryKind::Directory => {
@@ -1097,6 +1718,27 @@ fn read_catalog(
         return Err(PithosError::InvalidMetadata("original size"));
     }
 
+    let mut restore_by_entry = BTreeMap::new();
+    for restore in &restore_map {
+        let entry = entries
+            .get(restore.entry_id as usize)
+            .ok_or(PithosError::InvalidMetadata("restore entry"))?;
+        let EntryKind::File { group_id } = entry.kind else {
+            return Err(PithosError::InvalidMetadata("restore entry kind"));
+        };
+        if restore.entry_id != entry.entry_id
+            || restore.original_offset != 0
+            || restore.length != entry.size
+            || restore.group_id != group_id
+            || restore_by_entry.insert(restore.entry_id, restore).is_some()
+        {
+            return Err(PithosError::InvalidMetadata("restore map entry"));
+        }
+    }
+    if restore_by_entry.len() as u64 != file_count {
+        return Err(PithosError::InvalidMetadata("restore map file count"));
+    }
+
     let payload_end = payload_section
         .offset
         .checked_add(payload_section.length)
@@ -1108,15 +1750,47 @@ fn read_catalog(
         if group.group_id != position as u64
             || group.version != 1
             || group.flags != 0
-            || group.codec_chain_id != 0
-            || group.chunk_count != 1
             || group.descriptor_len != 0
-            || group.uncompressed_len != group.compressed_len
         {
-            return Err(PithosError::InvalidMetadata("RAW group"));
+            return Err(PithosError::InvalidMetadata("group header"));
         }
-        if group.compressed_len > limits.max_group_output {
+        if group.uncompressed_len > limits.max_group_output
+            || group.compressed_len
+                > limits
+                    .max_group_output
+                    .checked_add(1024 * 1024)
+                    .ok_or(PithosError::IntegerOverflow)?
+        {
             return Err(PithosError::ResourceLimit("group output"));
+        }
+        if group.compressed_len != 0
+            && group
+                .compressed_len
+                .checked_mul(limits.max_expansion_ratio)
+                .is_some_and(|maximum| group.uncompressed_len > maximum)
+        {
+            return Err(PithosError::ResourceLimit("group expansion ratio"));
+        }
+        match (group.codec_chain_id, &codec_registry) {
+            (0, None) => {
+                if group.chunk_count != 1 || group.uncompressed_len != group.compressed_len {
+                    return Err(PithosError::InvalidMetadata("RAW group"));
+                }
+            }
+            (0, Some(_)) | (_, None) => return Err(PithosError::UnsupportedCodec),
+            (chain_id, Some(registry)) => {
+                let record = registry
+                    .chain(chain_id)
+                    .ok_or(PithosError::UnsupportedCodec)?;
+                let codec_id =
+                    CodecId::from_u16(record.codec_id).ok_or(PithosError::UnsupportedCodec)?;
+                codec_for_id(codec_id).memory_bound(
+                    group.uncompressed_len,
+                    &CodecConfig {
+                        level: record.level,
+                    },
+                )?;
+            }
         }
         let group_end = record
             .payload_offset
@@ -1128,16 +1802,24 @@ fn read_catalog(
         {
             return Err(PithosError::InvalidRange);
         }
-        let owner = group_owners[position].ok_or(PithosError::InvalidMetadata("group owner"))?;
-        let entry = &entries[owner];
-        let restore = &restore_map[position];
-        if restore.entry_id != entry.entry_id
-            || restore.original_offset != 0
-            || restore.length != group.uncompressed_len
-            || restore.group_id != group.group_id
-            || restore.group_offset != 0
-        {
-            return Err(PithosError::InvalidMetadata("restore map"));
+        let mappings = restore_map
+            .iter()
+            .filter(|restore| restore.group_id == group.group_id)
+            .collect::<Vec<_>>();
+        if mappings.len() != group.chunk_count as usize || mappings.is_empty() {
+            return Err(PithosError::InvalidMetadata("group chunk count"));
+        }
+        let mut expected_offset = 0_u64;
+        for restore in mappings {
+            if restore.group_offset != expected_offset {
+                return Err(PithosError::InvalidMetadata("restore group order"));
+            }
+            expected_offset = expected_offset
+                .checked_add(restore.length)
+                .ok_or(PithosError::IntegerOverflow)?;
+        }
+        if expected_offset != group.uncompressed_len {
+            return Err(PithosError::InvalidMetadata("restore group length"));
         }
         previous_group_end = group_end;
     }
@@ -1159,6 +1841,8 @@ fn read_catalog(
         },
         entries,
         groups,
+        restore_map,
+        codec_registry,
         payload_section: payload_section.clone(),
         footer_offset: header.footer_offset,
         expected_root: footer.blake3_root,
@@ -1182,22 +1866,26 @@ fn verify_open_file(
     }
     for group in &parsed.groups {
         cancellation.checkpoint()?;
-        let entry = parsed
-            .entries
-            .iter()
-            .find(|entry| matches!(entry.kind, EntryKind::File { group_id } if group_id == group.group.group_id))
-            .ok_or(PithosError::InvalidMetadata("group owner"))?;
-        let (crc, hash) = digest_range(
+        let decoded = decode_group(
             file,
-            group.payload_offset,
-            group.group.compressed_len,
+            group,
+            parsed.codec_registry.as_ref(),
+            limits,
             cancellation,
         )?;
-        if crc != group.group.payload_crc32c {
-            return Err(PithosError::ChecksumMismatch);
-        }
-        if hash != entry.blake3 {
-            return Err(PithosError::HashMismatch);
+        for restore in parsed
+            .restore_map
+            .iter()
+            .filter(|restore| restore.group_id == group.group.group_id)
+        {
+            let entry = parsed
+                .entries
+                .get(restore.entry_id as usize)
+                .ok_or(PithosError::InvalidMetadata("restore entry"))?;
+            let bytes = restored_slice(&decoded, restore, 0, restore.length)?;
+            if blake3::hash(bytes).as_bytes() != &entry.blake3 {
+                return Err(PithosError::HashMismatch);
+            }
         }
     }
     let (_, root) = digest_range(file, 0, parsed.footer_offset, cancellation)?;
@@ -1253,6 +1941,85 @@ fn file_source_entry<'a>(
     }
 }
 
+fn restore_for_entry(parsed: &ParsedArchive, entry_id: u64) -> Result<&RestoreMapRecord> {
+    parsed
+        .restore_map
+        .iter()
+        .find(|restore| restore.entry_id == entry_id)
+        .ok_or(PithosError::InvalidMetadata("restore entry missing"))
+}
+
+fn restored_slice<'a>(
+    decoded_group: &'a [u8],
+    restore: &RestoreMapRecord,
+    offset: u64,
+    length: u64,
+) -> Result<&'a [u8]> {
+    let entry_end = offset
+        .checked_add(length)
+        .ok_or(PithosError::IntegerOverflow)?;
+    if entry_end > restore.length {
+        return Err(PithosError::InvalidRange);
+    }
+    let start = restore
+        .group_offset
+        .checked_add(offset)
+        .ok_or(PithosError::IntegerOverflow)?;
+    let end = start
+        .checked_add(length)
+        .ok_or(PithosError::IntegerOverflow)?;
+    let start = usize::try_from(start).map_err(|_| PithosError::IntegerOverflow)?;
+    let end = usize::try_from(end).map_err(|_| PithosError::IntegerOverflow)?;
+    decoded_group
+        .get(start..end)
+        .ok_or(PithosError::InvalidRange)
+}
+
+fn decode_group(
+    file: &mut File,
+    record: &GroupTableRecord,
+    registry: Option<&CodecRegistry>,
+    limits: &DecodeLimits,
+    cancellation: &CancellationToken,
+) -> Result<Vec<u8>> {
+    cancellation.checkpoint()?;
+    let maximum_compressed = limits
+        .max_group_output
+        .checked_add(1024 * 1024)
+        .ok_or(PithosError::IntegerOverflow)?;
+    let payload = read_exact_vec(
+        file,
+        record.payload_offset,
+        record.group.compressed_len,
+        maximum_compressed,
+    )?;
+    if crc32c::crc32c(&payload) != record.group.payload_crc32c {
+        return Err(PithosError::ChecksumMismatch);
+    }
+    let codec_id = if record.group.codec_chain_id == 0 {
+        if registry.is_some() {
+            return Err(PithosError::UnsupportedCodec);
+        }
+        CodecId::Store
+    } else {
+        let registry = registry.ok_or(PithosError::UnsupportedCodec)?;
+        let codec = registry
+            .chain(record.group.codec_chain_id)
+            .ok_or(PithosError::UnsupportedCodec)?;
+        CodecId::from_u16(codec.codec_id).ok_or(PithosError::UnsupportedCodec)?
+    };
+    let capacity =
+        usize::try_from(record.group.uncompressed_len).map_err(|_| PithosError::MemoryLimit)?;
+    let mut decoded = Vec::with_capacity(capacity);
+    codec_for_id(codec_id).decode(
+        &mut std::io::Cursor::new(payload),
+        record.group.uncompressed_len,
+        &mut decoded,
+    )?;
+    cancellation.checkpoint()?;
+    Ok(decoded)
+}
+
 fn validate_header_limits(
     header: &GlobalHeader,
     file_length: u64,
@@ -1261,7 +2028,9 @@ fn validate_header_limits(
     if header.flags != 0 {
         return Err(PithosError::UnsupportedContainerVersion);
     }
-    if header.section_count != REQUIRED_RAW_SECTIONS || header.section_count > limits.max_sections {
+    if ![REQUIRED_RAW_SECTIONS, REQUIRED_COMPRESSED_SECTIONS].contains(&header.section_count)
+        || header.section_count > limits.max_sections
+    {
         return Err(PithosError::ResourceLimit("section count"));
     }
     if header.entry_count > limits.max_entries {
@@ -1325,6 +2094,23 @@ fn read_json_section<T: DeserializeOwned>(
     serde_json::from_slice(&bytes).map_err(|_| PithosError::InvalidMetadata("JSON section"))
 }
 
+fn read_checked_section(
+    file: &mut File,
+    section: &SectionDirectoryRecord,
+    limits: &DecodeLimits,
+) -> Result<Vec<u8>> {
+    let bytes = read_exact_vec(
+        file,
+        section.offset,
+        section.length,
+        limits.max_metadata_bytes,
+    )?;
+    if crc32c::crc32c(&bytes) != section.crc32c {
+        return Err(PithosError::ChecksumMismatch);
+    }
+    Ok(bytes)
+}
+
 fn read_exact_vec(file: &mut File, offset: u64, length: u64, maximum: u64) -> Result<Vec<u8>> {
     if length > maximum {
         return Err(PithosError::ResourceLimit("metadata allocation"));
@@ -1347,6 +2133,7 @@ fn required_section(
 
 fn section_name(section_type: SectionType) -> &'static str {
     match section_type {
+        SectionType::CodecRegistry => "CodecRegistry",
         SectionType::EntryTable => "EntryTable",
         SectionType::GroupTable => "GroupTable",
         SectionType::PayloadArea => "PayloadArea",
@@ -1458,85 +2245,6 @@ fn digest_range(
         remaining -= read as u64;
     }
     Ok((crc, *hasher.finalize().as_bytes()))
-}
-
-fn copy_range<W: Write>(
-    source: &mut File,
-    offset: u64,
-    length: u64,
-    destination: &mut W,
-    cancellation: &CancellationToken,
-) -> Result<(u32, [u8; 32])> {
-    source.seek(SeekFrom::Start(offset))?;
-    let mut remaining = length;
-    let mut buffer = [0_u8; IO_BUFFER_SIZE];
-    let mut crc = 0_u32;
-    let mut hasher = blake3::Hasher::new();
-    while remaining > 0 {
-        cancellation.checkpoint()?;
-        let wanted = remaining.min(IO_BUFFER_SIZE as u64) as usize;
-        let read = source.read(&mut buffer[..wanted])?;
-        if read == 0 {
-            return Err(std::io::Error::from(ErrorKind::UnexpectedEof).into());
-        }
-        destination.write_all(&buffer[..read])?;
-        crc = crc32c::crc32c_append(crc, &buffer[..read]);
-        hasher.update(&buffer[..read]);
-        remaining -= read as u64;
-    }
-    Ok((crc, *hasher.finalize().as_bytes()))
-}
-
-fn copy_verified_subrange<W: Write>(
-    source: &mut File,
-    group_offset: u64,
-    group_length: u64,
-    range_offset: u64,
-    range_length: u64,
-    destination: &mut W,
-    cancellation: &CancellationToken,
-) -> Result<(u32, [u8; 32], [u8; 32])> {
-    source.seek(SeekFrom::Start(group_offset))?;
-    let range_end = range_offset
-        .checked_add(range_length)
-        .ok_or(PithosError::IntegerOverflow)?;
-    let mut consumed = 0_u64;
-    let mut remaining = group_length;
-    let mut buffer = [0_u8; IO_BUFFER_SIZE];
-    let mut crc = 0_u32;
-    let mut entry_hasher = blake3::Hasher::new();
-    let mut range_hasher = blake3::Hasher::new();
-    while remaining > 0 {
-        cancellation.checkpoint()?;
-        let wanted = remaining.min(IO_BUFFER_SIZE as u64) as usize;
-        let read = source.read(&mut buffer[..wanted])?;
-        if read == 0 {
-            return Err(std::io::Error::from(ErrorKind::UnexpectedEof).into());
-        }
-        let chunk_end = consumed
-            .checked_add(read as u64)
-            .ok_or(PithosError::IntegerOverflow)?;
-        let write_start = consumed.max(range_offset);
-        let write_end = chunk_end.min(range_end);
-        if write_start < write_end {
-            let start = usize::try_from(write_start - consumed)
-                .map_err(|_| PithosError::IntegerOverflow)?;
-            let end =
-                usize::try_from(write_end - consumed).map_err(|_| PithosError::IntegerOverflow)?;
-            let selected = &buffer[start..end];
-            destination.write_all(selected)?;
-            range_hasher.update(selected);
-        }
-        crc = crc32c::crc32c_append(crc, &buffer[..read]);
-        entry_hasher.update(&buffer[..read]);
-        consumed = chunk_end;
-        remaining -= read as u64;
-    }
-    Ok((
-        crc,
-        *entry_hasher.finalize().as_bytes(),
-        *range_hasher.finalize().as_bytes(),
-    ))
 }
 
 fn copy_input_file(
