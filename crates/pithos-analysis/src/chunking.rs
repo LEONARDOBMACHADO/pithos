@@ -1,4 +1,9 @@
-use std::io::Read;
+use std::{
+    cell::RefCell,
+    cmp::Ordering,
+    io::{self, Read},
+    rc::Rc,
+};
 
 use fastcdc::v2020::{
     AVERAGE_MAX, AVERAGE_MIN, FastCDC, MAXIMUM_MAX, MAXIMUM_MIN, MINIMUM_MAX, MINIMUM_MIN,
@@ -194,8 +199,15 @@ where
     F: FnMut() -> Result<()>,
 {
     config.validate()?;
-    let mut chunker = StreamCDC::with_level_and_seed(
-        reader,
+    let checkpoint_error = Rc::new(RefCell::new(None));
+    let bounded_reader = BoundedCheckpointReader {
+        inner: reader,
+        checkpoint: &mut checkpoint,
+        checkpoint_error: Rc::clone(&checkpoint_error),
+        remaining: config.max_logical_bytes.saturating_add(1),
+    };
+    let chunker = StreamCDC::with_level_and_seed(
+        bounded_reader,
         config.fastcdc_min as usize,
         config.fastcdc_avg as usize,
         config.fastcdc_max as usize,
@@ -205,15 +217,17 @@ where
     let mut chunks = Vec::new();
     let mut logical_size = 0_u64;
 
-    loop {
-        checkpoint()?;
-        let Some(next) = chunker.next() else {
-            break;
+    for next in chunker {
+        let chunk = match next {
+            Ok(chunk) => chunk,
+            Err(error) => {
+                if let Some(error) = checkpoint_error.borrow_mut().take() {
+                    return Err(error);
+                }
+                let error: io::Error = error.into();
+                return Err(PithosError::Io(error));
+            }
         };
-        let chunk = next.map_err(|error| {
-            let error: std::io::Error = error.into();
-            PithosError::Io(error)
-        })?;
         if chunk.offset != logical_size || chunk.data.len() != chunk.length {
             return Err(PithosError::InvalidMetadata("FastCDC stream layout"));
         }
@@ -230,6 +244,9 @@ where
             config.max_chunks,
         )?;
         logical_size = next_size;
+    }
+    if let Some(error) = checkpoint_error.borrow_mut().take() {
+        return Err(error);
     }
 
     validate_chunk_coverage(&chunks, origin, logical_size)?;
@@ -339,11 +356,11 @@ where
         }
         return Err(PithosError::InvalidMetadata("structural boundaries"));
     }
-    validate_boundary_ends(boundary_ends, logical_size)?;
     ensure_chunk_count(
         u64::try_from(boundary_ends.len()).map_err(|_| PithosError::IntegerOverflow)?,
         config.max_chunks,
     )?;
+    validate_boundary_ends(boundary_ends, logical_size)?;
 
     let mut chunks = Vec::new();
     let mut region_start = 0_u64;
@@ -447,11 +464,11 @@ where
             _ => Err(PithosError::InvalidMetadata("trailing structural data")),
         };
     }
-    validate_boundary_ends(boundary_ends, logical_size)?;
     ensure_chunk_count(
         u64::try_from(boundary_ends.len()).map_err(|_| PithosError::IntegerOverflow)?,
         config.max_chunks,
     )?;
+    validate_boundary_ends(boundary_ends, logical_size)?;
 
     let mut chunks = Vec::new();
     let mut region_start = 0_u64;
@@ -576,9 +593,22 @@ pub fn validate_chunk_coverage(
 /// at zero. Duplicate tuple keys are rejected because they have no stable
 /// tie-break defined by the format contract.
 pub fn assign_chunk_ids(
-    mut drafts: Vec<LogicalChunkDraft>,
+    drafts: Vec<LogicalChunkDraft>,
     max_chunks: u64,
 ) -> Result<Vec<LogicalChunk>> {
+    assign_chunk_ids_with_checkpoint(drafts, max_chunks, || Ok(()))
+}
+
+/// Deterministic global ID assignment with cooperative checkpoints throughout
+/// sorting and materialization.
+pub fn assign_chunk_ids_with_checkpoint<F>(
+    mut drafts: Vec<LogicalChunkDraft>,
+    max_chunks: u64,
+    mut checkpoint: F,
+) -> Result<Vec<LogicalChunk>>
+where
+    F: FnMut() -> Result<()>,
+{
     if max_chunks == 0 {
         return Err(PithosError::InvalidMetadata("chunk count limit"));
     }
@@ -586,7 +616,17 @@ pub fn assign_chunk_ids(
         u64::try_from(drafts.len()).map_err(|_| PithosError::IntegerOverflow)?,
         max_chunks,
     )?;
-    drafts.sort_unstable_by_key(|chunk| (chunk.entry_id, chunk.object_id, chunk.logical_offset));
+    try_sort_by_checkpoint(
+        &mut drafts,
+        |left, right| {
+            (left.entry_id, left.object_id, left.logical_offset).cmp(&(
+                right.entry_id,
+                right.object_id,
+                right.logical_offset,
+            ))
+        },
+        &mut checkpoint,
+    )?;
     if drafts.windows(2).any(|pair| {
         (pair[0].entry_id, pair[0].object_id, pair[0].logical_offset)
             == (pair[1].entry_id, pair[1].object_id, pair[1].logical_offset)
@@ -599,6 +639,7 @@ pub fn assign_chunk_ids(
         .try_reserve_exact(drafts.len())
         .map_err(|_| PithosError::MemoryLimit)?;
     for (index, draft) in drafts.into_iter().enumerate() {
+        checkpoint()?;
         if draft.length == 0 && draft.method != ChunkingMethod::MicroFile {
             return Err(PithosError::InvalidMetadata("zero-length chunk"));
         }
@@ -616,6 +657,106 @@ pub fn assign_chunk_ids(
         });
     }
     Ok(chunks)
+}
+
+struct BoundedCheckpointReader<'a, R, F> {
+    inner: R,
+    checkpoint: &'a mut F,
+    checkpoint_error: Rc<RefCell<Option<PithosError>>>,
+    remaining: u64,
+}
+
+impl<R, F> Read for BoundedCheckpointReader<'_, R, F>
+where
+    R: Read,
+    F: FnMut() -> Result<()>,
+{
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if self.remaining == 0 || buffer.is_empty() {
+            return Ok(0);
+        }
+        if let Err(error) = (self.checkpoint)() {
+            *self.checkpoint_error.borrow_mut() = Some(error);
+            return Err(io::Error::other("logical chunking checkpoint"));
+        }
+        let buffer_len = u64::try_from(buffer.len())
+            .map_err(|_| io::Error::other("reader buffer length overflow"))?;
+        let allowed = usize::try_from(self.remaining.min(buffer_len))
+            .map_err(|_| io::Error::other("reader limit overflow"))?;
+        let read = self.inner.read(&mut buffer[..allowed])?;
+        self.remaining = self
+            .remaining
+            .checked_sub(u64::try_from(read).map_err(|_| io::Error::other("read overflow"))?)
+            .ok_or_else(|| io::Error::other("reader exceeded requested buffer"))?;
+        Ok(read)
+    }
+}
+
+pub(crate) fn try_sort_by_checkpoint<T, Compare, Checkpoint>(
+    items: &mut [T],
+    mut compare: Compare,
+    checkpoint: &mut Checkpoint,
+) -> Result<()>
+where
+    T: Copy,
+    Compare: FnMut(&T, &T) -> Ordering,
+    Checkpoint: FnMut() -> Result<()>,
+{
+    if items.len() < 2 {
+        checkpoint()?;
+        return Ok(());
+    }
+
+    let mut scratch = Vec::new();
+    scratch
+        .try_reserve_exact(items.len())
+        .map_err(|_| PithosError::MemoryLimit)?;
+    scratch.extend_from_slice(items);
+
+    let mut width = 1_usize;
+    while width < items.len() {
+        let mut start = 0_usize;
+        while start < items.len() {
+            checkpoint()?;
+            let middle = start.saturating_add(width).min(items.len());
+            let end = middle.saturating_add(width).min(items.len());
+            let mut left = start;
+            let mut right = middle;
+            let mut output = start;
+
+            while left < middle && right < end {
+                checkpoint()?;
+                if compare(&items[left], &items[right]) != Ordering::Greater {
+                    scratch[output] = items[left];
+                    left += 1;
+                } else {
+                    scratch[output] = items[right];
+                    right += 1;
+                }
+                output += 1;
+            }
+            while left < middle {
+                checkpoint()?;
+                scratch[output] = items[left];
+                left += 1;
+                output += 1;
+            }
+            while right < end {
+                checkpoint()?;
+                scratch[output] = items[right];
+                right += 1;
+                output += 1;
+            }
+            start = end;
+        }
+
+        for (item, sorted) in items.iter_mut().zip(&scratch) {
+            checkpoint()?;
+            *item = *sorted;
+        }
+        width = width.saturating_mul(2);
+    }
+    Ok(())
 }
 
 fn validate_boundary_ends(boundary_ends: &[u64], logical_size: u64) -> Result<()> {

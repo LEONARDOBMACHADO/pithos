@@ -401,3 +401,23 @@ fn microfile_planning_exposes_cooperative_cancellation() {
         Err(PithosError::Cancelled)
     ));
 }
+
+#[test]
+fn public_microfile_validation_exposes_cooperative_cancellation() {
+    let inputs = (0..32)
+        .map(|entry_id| input(entry_id, &format!("root/{entry_id}.bin"), 1))
+        .collect::<Vec<_>>();
+    let config = ChunkingConfig::default();
+    let plan = plan_micro_file_packs(&inputs, &config).unwrap();
+
+    assert!(matches!(
+        plan.validate_with_checkpoint(&config, || Err(PithosError::Cancelled)),
+        Err(PithosError::Cancelled)
+    ));
+    assert!(matches!(
+        plan.packs[0]
+            .metadata
+            .expanded_paths_with_checkpoint(&config, || Err(PithosError::Cancelled)),
+        Err(PithosError::Cancelled)
+    ));
+}

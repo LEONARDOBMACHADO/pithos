@@ -1,4 +1,8 @@
-use std::io::{self, Cursor, Read};
+use std::{
+    cell::Cell,
+    io::{self, Cursor, Read},
+    rc::Rc,
+};
 
 use pithos_analysis::{
     ChunkOrigin, ChunkingConfig, ChunkingMethod, LogicalChunkDraft, assign_chunk_ids,
@@ -42,6 +46,23 @@ struct FailingReader;
 impl Read for FailingReader {
     fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
         Err(io::Error::other("synthetic reader failure"))
+    }
+}
+
+struct CountingByteReader {
+    bytes_read: Rc<Cell<usize>>,
+    remaining: usize,
+}
+
+impl Read for CountingByteReader {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if self.remaining == 0 || buffer.is_empty() {
+            return Ok(0);
+        }
+        buffer[0] = 0;
+        self.remaining -= 1;
+        self.bytes_read.set(self.bytes_read.get() + 1);
+        Ok(1)
     }
 }
 
@@ -346,6 +367,66 @@ fn streaming_fastcdc_observes_cancellation_checkpoint() {
 
     assert!(matches!(result, Err(PithosError::Cancelled)));
     assert!(checkpoint_calls > 0);
+}
+
+#[test]
+fn streaming_fastcdc_stops_reading_at_the_logical_byte_limit() {
+    let bytes_read = Rc::new(Cell::new(0));
+    let reader = CountingByteReader {
+        bytes_read: Rc::clone(&bytes_read),
+        remaining: 100_000,
+    };
+    let config = ChunkingConfig {
+        max_logical_bytes: 7,
+        ..ChunkingConfig::default()
+    };
+
+    assert!(matches!(
+        chunk_fastcdc_reader(
+            reader,
+            ChunkOrigin {
+                entry_id: 1,
+                object_id: 1,
+                base_offset: 0,
+            },
+            &config,
+        ),
+        Err(PithosError::ResourceLimit("logical bytes"))
+    ));
+    assert_eq!(bytes_read.get(), 8);
+}
+
+#[test]
+fn streaming_fastcdc_checkpoints_each_underlying_read() {
+    let bytes_read = Rc::new(Cell::new(0));
+    let reader = CountingByteReader {
+        bytes_read: Rc::clone(&bytes_read),
+        remaining: 100_000,
+    };
+    let mut checkpoints = 0_u64;
+
+    assert!(matches!(
+        chunk_fastcdc_reader_with_checkpoint(
+            reader,
+            ChunkOrigin {
+                entry_id: 1,
+                object_id: 1,
+                base_offset: 0,
+            },
+            &ChunkingConfig::default(),
+            || {
+                checkpoints += 1;
+                if checkpoints == 4 {
+                    Err(PithosError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        ),
+        Err(PithosError::Cancelled)
+    ));
+    assert_eq!(checkpoints, 4);
+    assert_eq!(bytes_read.get(), 3);
 }
 
 #[test]
@@ -694,6 +775,10 @@ fn max_chunks_is_enforced_before_unbounded_chunk_metadata_growth() {
             &config,
         ),
         Err(PithosError::ResourceLimit(_))
+    ));
+    assert!(matches!(
+        chunk_structural(&[0_u8; 3], origin, &[2, 1, 3], &config),
+        Err(PithosError::ResourceLimit("chunk count"))
     ));
 
     let drafts = vec![
