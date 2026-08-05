@@ -71,3 +71,10 @@ Este documento registra as 10 decisões arquiteturais normativas e imutáveis da
 - **Status:** Aceito
 - **Contexto:** Gerenciamento de spools e integridade durante falhas ou cancelamento.
 - **Decisão:** Arquivos temporários de spool serão gravados via `tempfile` no mesmo volume de destino quando possível. A substituição do arquivo final só ocorrerá via **rename atômico** após a validação completa de integridade (`verify`). Erros ou cancelamentos limparão 100% dos spools sem deixar arquivos parciais com o nome final.
+
+---
+
+## ADR-011: Logical Chunking Contract & PAF Boundary
+- **Status:** Aceito
+- **Contexto:** Logical chunks precisam ser determinísticos e servir a fingerprints/dedup sem serem confundidos com compression groups. O PAF 0.1-draft atual ainda não possui `ChunkTable` independente.
+- **Decisão:** `pithos-analysis` usa FastCDC v2020 da crate `fastcdc = 4.0.1`, Level1, seed 0 e 64/256/1024 KiB; high-entropy fixed de 1–4 MiB; boundaries estruturais validados; e MicroFilePack metadata-only de 1–16 MiB. Todos os caminhos possuem limites explícitos de chunks, bytes lógicos, metadata e paths, além de variantes cooperativamente canceláveis. Esta etapa permanece format-neutral. A persistência no PAF só será ligada com uma `ChunkTable` explícita durante fingerprints/exact dedup, mantendo separados LogicalChunk, RestoreMap e GroupTable.

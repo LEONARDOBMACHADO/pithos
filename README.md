@@ -29,6 +29,7 @@ tornar o parser vulnerável a arquivos malformados.
 | Agent API local com 12 métodos | Implementada |
 | Jobs persistentes, idempotência, eventos, prioridades, quotas e recovery | Implementados |
 | Zstandard, Brotli, LZMA2, seleção determinística e solid groups | Implementados e testados |
+| Logical chunking (FastCDC, fixed, structural e MicroFilePack) | Implementado e testado |
 | Deduplicação, similarity, transforms, recompression, viewer e mount | Fases posteriores |
 
 Os perfis públicos de empacotamento são:
@@ -60,7 +61,9 @@ Agent API JSON, o último perfil é escrito `archive_max`; a CLI e a resposta de
 - cada codec obrigatório possui vetor de bytes e BLAKE3 fixado por teste;
 - perfis comprimidos validam identidade, timestamp, tamanho e hash da entrada
   entre scan, hashing e encoding;
-- cotas de memória e espaço temporário são aplicadas separadamente pelo engine.
+- cotas de memória e espaço temporário são aplicadas separadamente pelo engine;
+- boundaries lógicos são determinísticos, streaming e validados sem gaps ou
+  overlaps, com vetor FastCDC fixado e MicroFilePack metadata-only.
 
 O usuário do sistema operacional é a fronteira de segurança do daemon. O
 `path_scope` restringe clientes e automações a raízes canonicalizadas, mas não é
@@ -145,6 +148,7 @@ retoma a sessão após reconexões de transporte.
 | `pithos-format` | records e codificação do PAF |
 | `pithos-io` | publicação atômica e primitivas de I/O |
 | `pithos-codecs` | contrato e backends de codec |
+| `pithos-analysis` | logical chunking, MicroFilePack e análises para dedup/similarity |
 | `pithos-planner` | custos e decisões globais de encoding |
 | `pithos-engine` | pack, catálogo, verify, extract e unpack |
 | `pithos-agent-api` | contrato JSON-RPC público |
@@ -162,6 +166,8 @@ recompression, viewer e mount, que serão preenchidas nas fases correspondentes.
   registry de codecs, solid groups e perfis;
 - [`docs/agent-api-v1.md`](docs/agent-api-v1.md): transporte, sessões, métodos,
   jobs, quotas e erros públicos;
+- [`docs/logical-chunking.md`](docs/logical-chunking.md): algoritmos, vetores,
+  limites e fronteira format-neutral do chunking;
 - [`docs/adrs/ADRS.md`](docs/adrs/ADRS.md): decisões arquiteturais;
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): fluxo de contribuição e gates locais;
 - [`SECURITY.md`](SECURITY.md): canal e fronteira de segurança.
