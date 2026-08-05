@@ -493,3 +493,58 @@ async fn standalone_remains_the_default_without_a_daemon() {
     let error: Value = serde_json::from_slice(&invalid.stderr).unwrap();
     assert_eq!(error["error"]["kind"], "command_failed");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn every_profile_restores_identical_bytes_in_standalone_and_daemon_modes() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = temp.path().join("profile-matrix-state");
+    let source = temp.path().join("profile-payload.txt");
+    let expected = b"profile-matrix-payload-".repeat(256);
+    std::fs::write(&source, &expected).unwrap();
+
+    let endpoint = IpcEndpoint::for_state_dir(state.clone());
+    let mut config = DaemonConfig::new(state.clone());
+    let current_dir = std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap();
+    config.allowed_scope = pithos_agent_api::PathScope {
+        read_roots: vec![temp.path().to_path_buf(), current_dir.clone()],
+        write_roots: vec![temp.path().to_path_buf(), current_dir],
+    };
+    let server = IpcServer::spawn(DaemonService::open(config).unwrap(), endpoint)
+        .await
+        .unwrap();
+
+    let state = path_text(&state);
+    let source = path_text(&source);
+    for profile in ["raw", "stream", "random", "balanced", "archive-max"] {
+        for mode in ["standalone", "daemon"] {
+            let archive = path_text(&temp.path().join(format!("{mode}-{profile}.pithos")));
+            let mut common = vec!["--output-format", "json"];
+            if mode == "daemon" {
+                common.extend(["--mode", "daemon", "--daemon-state-dir", &state]);
+            }
+
+            let mut pack_args = common.clone();
+            pack_args.extend(["pack", &source, "--output", &archive, "--profile", profile]);
+            let packed = invoke(&pack_args).await;
+            assert_success(&packed);
+
+            let mut verify_args = common.clone();
+            verify_args.extend(["verify", &archive]);
+            let verified = invoke(&verify_args).await;
+            assert_success(&verified);
+            let verified: Value = serde_json::from_slice(&verified.stdout).unwrap();
+            assert_eq!(verified["file_count"], 1, "mode={mode} profile={profile}");
+
+            let mut extract_args = Vec::new();
+            if mode == "daemon" {
+                extract_args.extend(["--mode", "daemon", "--daemon-state-dir", &state]);
+            }
+            extract_args.extend(["extract", &archive, "profile-payload.txt", "--stdout"]);
+            let extracted = invoke(&extract_args).await;
+            assert_success(&extracted);
+            assert_eq!(extracted.stdout, expected, "mode={mode} profile={profile}");
+        }
+    }
+
+    server.shutdown().await.unwrap();
+}
