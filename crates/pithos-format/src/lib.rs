@@ -657,6 +657,67 @@ mod tests {
         assert!(!unsafe_target.resolves_within(&link));
     }
 
+    #[test]
+    fn codec_registry_roundtrips_stable_chain_records() {
+        let registry = CodecRegistry {
+            records: vec![
+                CodecRegistryRecord {
+                    chain_id: 1,
+                    codec_id: 1,
+                    codec_version: 1,
+                    level: 9,
+                    flags: CODEC_FLAG_REQUIRED,
+                },
+                CodecRegistryRecord {
+                    chain_id: 2,
+                    codec_id: 2,
+                    codec_version: 1,
+                    level: 7,
+                    flags: CODEC_FLAG_REQUIRED,
+                },
+            ],
+        };
+        let encoded = registry.encode().unwrap();
+        assert_eq!(CodecRegistry::decode(&encoded, 8).unwrap(), registry);
+    }
+
+    #[test]
+    fn codec_registry_rejects_unknown_required_codec() {
+        let registry = CodecRegistry {
+            records: vec![CodecRegistryRecord {
+                chain_id: 1,
+                codec_id: 99,
+                codec_version: 1,
+                level: 0,
+                flags: CODEC_FLAG_REQUIRED,
+            }],
+        };
+        let encoded = registry.encode().unwrap();
+        assert!(matches!(
+            CodecRegistry::decode(&encoded, 8),
+            Err(PithosError::UnsupportedCodec)
+        ));
+    }
+
+    #[test]
+    fn codec_registry_rejects_duplicate_chains_and_declared_size_abuse() {
+        let duplicate = CodecRegistry {
+            records: vec![
+                CodecRegistryRecord::store(1),
+                CodecRegistryRecord::store(1),
+            ],
+        };
+        assert!(duplicate.encode().is_err());
+
+        let mut oversized = 9_u32.to_le_bytes().to_vec();
+        oversized.resize(4 + 9 * CODEC_REGISTRY_RECORD_LEN, 0);
+        assert!(matches!(
+            CodecRegistry::decode(&oversized, 8),
+            Err(PithosError::ResourceLimit(_))
+        ));
+        assert!(CodecRegistry::decode(&[1, 0, 0, 0], 8).is_err());
+    }
+
     proptest! {
         #[test]
         fn fixed_record_decoders_never_panic(
