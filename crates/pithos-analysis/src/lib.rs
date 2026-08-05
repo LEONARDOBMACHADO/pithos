@@ -1,4 +1,10 @@
-//! Logical Chunking, Fingerprinting & Dedup Analysis Placeholder
+//! Format-neutral logical chunking and analysis primitives for Pithos.
+
+mod chunking;
+mod micro_file;
+
+pub use chunking::*;
+pub use micro_file::*;
 
 pub struct ChunkFingerprint {
     pub chunk_id: u64,

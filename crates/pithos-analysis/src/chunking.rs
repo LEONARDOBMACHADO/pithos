@@ -1,0 +1,486 @@
+use std::io::Read;
+
+use fastcdc::v2020::{
+    AVERAGE_MAX, AVERAGE_MIN, FastCDC, MAXIMUM_MAX, MAXIMUM_MIN, MINIMUM_MAX, MINIMUM_MIN,
+    Normalization, StreamCDC,
+};
+use pithos_core::{DecodeLimits, PithosError, Result};
+
+const KIB: u32 = 1024;
+const MIB: u32 = 1024 * KIB;
+const FASTCDC_SEED: u64 = 0;
+
+/// Deterministic policy and resource limits for logical chunking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChunkingConfig {
+    pub fastcdc_min: u32,
+    pub fastcdc_avg: u32,
+    pub fastcdc_max: u32,
+    pub high_entropy_fixed: u32,
+    pub micro_file_max: u32,
+    pub micro_pack_target: u32,
+    pub max_chunks: u64,
+}
+
+impl Default for ChunkingConfig {
+    fn default() -> Self {
+        Self {
+            fastcdc_min: 64 * KIB,
+            fastcdc_avg: 256 * KIB,
+            fastcdc_max: MIB,
+            high_entropy_fixed: MIB,
+            micro_file_max: 64 * KIB,
+            micro_pack_target: 4 * MIB,
+            max_chunks: DecodeLimits::default().max_chunks,
+        }
+    }
+}
+
+impl ChunkingConfig {
+    /// Validates all values before they reach a third-party chunker or drive an
+    /// allocation. The FastCDC crate only debug-asserts some of these limits.
+    pub fn validate(&self) -> Result<()> {
+        let min = usize::try_from(self.fastcdc_min).map_err(|_| PithosError::IntegerOverflow)?;
+        let avg = usize::try_from(self.fastcdc_avg).map_err(|_| PithosError::IntegerOverflow)?;
+        let max = usize::try_from(self.fastcdc_max).map_err(|_| PithosError::IntegerOverflow)?;
+
+        if !((MINIMUM_MIN..=MINIMUM_MAX).contains(&min)
+            && (AVERAGE_MIN..=AVERAGE_MAX).contains(&avg)
+            && (MAXIMUM_MIN..=MAXIMUM_MAX).contains(&max)
+            && min < avg
+            && avg < max)
+        {
+            return Err(PithosError::InvalidMetadata("FastCDC sizes"));
+        }
+        if !(MIB..=4 * MIB).contains(&self.high_entropy_fixed) {
+            return Err(PithosError::InvalidMetadata("high entropy block size"));
+        }
+        if self.micro_file_max == 0 || self.micro_file_max > 64 * KIB {
+            return Err(PithosError::InvalidMetadata("microfile size limit"));
+        }
+        if !(MIB..=16 * MIB).contains(&self.micro_pack_target)
+            || self.micro_pack_target < self.micro_file_max
+        {
+            return Err(PithosError::InvalidMetadata("microfile pack target"));
+        }
+        if self.max_chunks == 0 {
+            return Err(PithosError::InvalidMetadata("chunk count limit"));
+        }
+        Ok(())
+    }
+}
+
+/// Identity and offset of an independently chunked logical object.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ChunkOrigin {
+    pub entry_id: u64,
+    pub object_id: u64,
+    pub base_offset: u64,
+}
+
+/// Algorithm that produced a logical chunk boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ChunkingMethod {
+    FastCdcV2020,
+    FixedHighEntropy,
+    Structural,
+    MicroFile,
+}
+
+/// A chunk discovered by a worker before globally deterministic ID assignment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LogicalChunkDraft {
+    pub entry_id: u64,
+    pub object_id: u64,
+    pub logical_offset: u64,
+    pub length: u32,
+    pub method: ChunkingMethod,
+}
+
+/// Logical chunk with its final ID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LogicalChunk {
+    pub chunk_id: u64,
+    pub entry_id: u64,
+    pub object_id: u64,
+    pub logical_offset: u64,
+    pub length: u32,
+    pub method: ChunkingMethod,
+}
+
+/// Runs canonical FastCDC v2020 over an in-memory logical object.
+pub fn chunk_fastcdc(
+    data: &[u8],
+    origin: ChunkOrigin,
+    config: &ChunkingConfig,
+) -> Result<Vec<LogicalChunkDraft>> {
+    config.validate()?;
+    origin
+        .base_offset
+        .checked_add(u64::try_from(data.len()).map_err(|_| PithosError::IntegerOverflow)?)
+        .ok_or(PithosError::IntegerOverflow)?;
+
+    let mut chunks = Vec::new();
+    let chunker = FastCDC::with_level_and_seed(
+        data,
+        config.fastcdc_min as usize,
+        config.fastcdc_avg as usize,
+        config.fastcdc_max as usize,
+        Normalization::Level1,
+        FASTCDC_SEED,
+    );
+    for chunk in chunker {
+        push_relative_chunk(
+            &mut chunks,
+            origin,
+            u64::try_from(chunk.offset).map_err(|_| PithosError::IntegerOverflow)?,
+            chunk.length,
+            ChunkingMethod::FastCdcV2020,
+            config.max_chunks,
+        )?;
+    }
+    validate_chunk_coverage(
+        &chunks,
+        origin,
+        u64::try_from(data.len()).map_err(|_| PithosError::IntegerOverflow)?,
+    )?;
+    Ok(chunks)
+}
+
+/// Runs streaming FastCDC while retaining only chunk descriptors. The
+/// third-party iterator owns at most one `fastcdc_max`-sized data buffer.
+pub fn chunk_fastcdc_reader<R: Read>(
+    reader: R,
+    origin: ChunkOrigin,
+    config: &ChunkingConfig,
+) -> Result<Vec<LogicalChunkDraft>> {
+    chunk_fastcdc_reader_with_checkpoint(reader, origin, config, || Ok(()))
+}
+
+/// Streaming FastCDC variant with a cooperative cancellation/resource
+/// checkpoint evaluated before every chunk-sized read operation.
+pub fn chunk_fastcdc_reader_with_checkpoint<R, F>(
+    reader: R,
+    origin: ChunkOrigin,
+    config: &ChunkingConfig,
+    mut checkpoint: F,
+) -> Result<Vec<LogicalChunkDraft>>
+where
+    R: Read,
+    F: FnMut() -> Result<()>,
+{
+    config.validate()?;
+    let mut chunker = StreamCDC::with_level_and_seed(
+        reader,
+        config.fastcdc_min as usize,
+        config.fastcdc_avg as usize,
+        config.fastcdc_max as usize,
+        Normalization::Level1,
+        FASTCDC_SEED,
+    );
+    let mut chunks = Vec::new();
+    let mut logical_size = 0_u64;
+
+    loop {
+        checkpoint()?;
+        let Some(next) = chunker.next() else {
+            break;
+        };
+        let chunk = next.map_err(|error| {
+            let error: std::io::Error = error.into();
+            PithosError::Io(error)
+        })?;
+        if chunk.offset != logical_size || chunk.data.len() != chunk.length {
+            return Err(PithosError::InvalidMetadata("FastCDC stream layout"));
+        }
+        push_relative_chunk(
+            &mut chunks,
+            origin,
+            chunk.offset,
+            chunk.length,
+            ChunkingMethod::FastCdcV2020,
+            config.max_chunks,
+        )?;
+        logical_size = logical_size
+            .checked_add(u64::try_from(chunk.length).map_err(|_| PithosError::IntegerOverflow)?)
+            .ok_or(PithosError::IntegerOverflow)?;
+    }
+
+    validate_chunk_coverage(&chunks, origin, logical_size)?;
+    Ok(chunks)
+}
+
+/// Splits explicitly classified high-entropy content into fixed 1--4 MiB
+/// blocks. Entropy classification is deliberately left to the caller.
+pub fn chunk_fixed_high_entropy(
+    logical_size: u64,
+    origin: ChunkOrigin,
+    config: &ChunkingConfig,
+) -> Result<Vec<LogicalChunkDraft>> {
+    config.validate()?;
+    origin
+        .base_offset
+        .checked_add(logical_size)
+        .ok_or(PithosError::IntegerOverflow)?;
+    if logical_size == 0 {
+        return Ok(Vec::new());
+    }
+
+    let block_size = u64::from(config.high_entropy_fixed);
+    let chunk_count = logical_size
+        .checked_sub(1)
+        .and_then(|value| value.checked_div(block_size))
+        .and_then(|value| value.checked_add(1))
+        .ok_or(PithosError::IntegerOverflow)?;
+    ensure_chunk_count(chunk_count, config.max_chunks)?;
+    let capacity = usize::try_from(chunk_count).map_err(|_| PithosError::IntegerOverflow)?;
+    let mut chunks = Vec::new();
+    chunks
+        .try_reserve_exact(capacity)
+        .map_err(|_| PithosError::MemoryLimit)?;
+
+    let mut relative_offset = 0_u64;
+    while relative_offset < logical_size {
+        let remaining = logical_size - relative_offset;
+        let length = remaining.min(block_size);
+        push_relative_chunk(
+            &mut chunks,
+            origin,
+            relative_offset,
+            usize::try_from(length).map_err(|_| PithosError::IntegerOverflow)?,
+            ChunkingMethod::FixedHighEntropy,
+            config.max_chunks,
+        )?;
+        relative_offset = relative_offset
+            .checked_add(length)
+            .ok_or(PithosError::IntegerOverflow)?;
+    }
+
+    validate_chunk_coverage(&chunks, origin, logical_size)?;
+    Ok(chunks)
+}
+
+/// Preserves scanner-provided exclusive region ends. Regions larger than the
+/// FastCDC maximum are subchunked independently, so no chunk crosses a
+/// structural boundary.
+pub fn chunk_structural(
+    data: &[u8],
+    origin: ChunkOrigin,
+    boundary_ends: &[u64],
+    config: &ChunkingConfig,
+) -> Result<Vec<LogicalChunkDraft>> {
+    config.validate()?;
+    let logical_size = u64::try_from(data.len()).map_err(|_| PithosError::IntegerOverflow)?;
+    origin
+        .base_offset
+        .checked_add(logical_size)
+        .ok_or(PithosError::IntegerOverflow)?;
+
+    if data.is_empty() {
+        if boundary_ends.is_empty() {
+            return Ok(Vec::new());
+        }
+        return Err(PithosError::InvalidMetadata("structural boundaries"));
+    }
+    validate_boundary_ends(boundary_ends, logical_size)?;
+
+    let mut chunks = Vec::new();
+    let mut region_start = 0_u64;
+    for &region_end in boundary_ends {
+        let region_len = region_end
+            .checked_sub(region_start)
+            .ok_or(PithosError::IntegerOverflow)?;
+        if region_len <= u64::from(config.fastcdc_max) {
+            push_relative_chunk(
+                &mut chunks,
+                origin,
+                region_start,
+                usize::try_from(region_len).map_err(|_| PithosError::IntegerOverflow)?,
+                ChunkingMethod::Structural,
+                config.max_chunks,
+            )?;
+        } else {
+            let start = usize::try_from(region_start).map_err(|_| PithosError::IntegerOverflow)?;
+            let end = usize::try_from(region_end).map_err(|_| PithosError::IntegerOverflow)?;
+            let remaining_limit = config
+                .max_chunks
+                .checked_sub(u64::try_from(chunks.len()).map_err(|_| PithosError::IntegerOverflow)?)
+                .ok_or(PithosError::IntegerOverflow)?;
+            if remaining_limit == 0 {
+                return Err(PithosError::ResourceLimit("chunk count"));
+            }
+            let sub_origin = ChunkOrigin {
+                entry_id: origin.entry_id,
+                object_id: origin.object_id,
+                base_offset: origin
+                    .base_offset
+                    .checked_add(region_start)
+                    .ok_or(PithosError::IntegerOverflow)?,
+            };
+            let sub_config = ChunkingConfig {
+                max_chunks: remaining_limit,
+                ..*config
+            };
+            let mut subchunks = chunk_fastcdc(&data[start..end], sub_origin, &sub_config)?;
+            for chunk in &mut subchunks {
+                chunk.method = ChunkingMethod::Structural;
+            }
+            chunks
+                .try_reserve(subchunks.len())
+                .map_err(|_| PithosError::MemoryLimit)?;
+            chunks.extend(subchunks);
+        }
+        region_start = region_end;
+    }
+
+    validate_chunk_coverage(&chunks, origin, logical_size)?;
+    Ok(chunks)
+}
+
+/// Verifies exact, ordered coverage of one logical object.
+pub fn validate_chunk_coverage(
+    chunks: &[LogicalChunkDraft],
+    origin: ChunkOrigin,
+    logical_size: u64,
+) -> Result<()> {
+    let expected_end = origin
+        .base_offset
+        .checked_add(logical_size)
+        .ok_or(PithosError::IntegerOverflow)?;
+    if logical_size == 0 {
+        return if chunks.is_empty() {
+            Ok(())
+        } else {
+            Err(PithosError::InvalidMetadata("empty chunk coverage"))
+        };
+    }
+    if chunks.is_empty() {
+        return Err(PithosError::InvalidMetadata("missing chunk coverage"));
+    }
+
+    let mut cursor = origin.base_offset;
+    for chunk in chunks {
+        if chunk.entry_id != origin.entry_id
+            || chunk.object_id != origin.object_id
+            || chunk.logical_offset != cursor
+            || chunk.length == 0
+        {
+            return Err(PithosError::InvalidMetadata("chunk coverage"));
+        }
+        cursor = cursor
+            .checked_add(u64::from(chunk.length))
+            .ok_or(PithosError::IntegerOverflow)?;
+        if cursor > expected_end {
+            return Err(PithosError::InvalidMetadata("chunk coverage"));
+        }
+    }
+    if cursor != expected_end {
+        return Err(PithosError::InvalidMetadata("chunk coverage"));
+    }
+    Ok(())
+}
+
+/// Sorts worker drafts by the normative tuple and assigns stable IDs starting
+/// at zero. Duplicate tuple keys are rejected because they have no stable
+/// tie-break defined by the format contract.
+pub fn assign_chunk_ids(
+    mut drafts: Vec<LogicalChunkDraft>,
+    max_chunks: u64,
+) -> Result<Vec<LogicalChunk>> {
+    if max_chunks == 0 {
+        return Err(PithosError::InvalidMetadata("chunk count limit"));
+    }
+    ensure_chunk_count(
+        u64::try_from(drafts.len()).map_err(|_| PithosError::IntegerOverflow)?,
+        max_chunks,
+    )?;
+    drafts.sort_unstable_by_key(|chunk| (chunk.entry_id, chunk.object_id, chunk.logical_offset));
+    if drafts.windows(2).any(|pair| {
+        (pair[0].entry_id, pair[0].object_id, pair[0].logical_offset)
+            == (pair[1].entry_id, pair[1].object_id, pair[1].logical_offset)
+    }) {
+        return Err(PithosError::InvalidMetadata("duplicate chunk position"));
+    }
+
+    let mut chunks = Vec::new();
+    chunks
+        .try_reserve_exact(drafts.len())
+        .map_err(|_| PithosError::MemoryLimit)?;
+    for (index, draft) in drafts.into_iter().enumerate() {
+        if draft.length == 0 {
+            return Err(PithosError::InvalidMetadata("zero-length chunk"));
+        }
+        draft
+            .logical_offset
+            .checked_add(u64::from(draft.length))
+            .ok_or(PithosError::IntegerOverflow)?;
+        chunks.push(LogicalChunk {
+            chunk_id: u64::try_from(index).map_err(|_| PithosError::IntegerOverflow)?,
+            entry_id: draft.entry_id,
+            object_id: draft.object_id,
+            logical_offset: draft.logical_offset,
+            length: draft.length,
+            method: draft.method,
+        });
+    }
+    Ok(chunks)
+}
+
+fn validate_boundary_ends(boundary_ends: &[u64], logical_size: u64) -> Result<()> {
+    if boundary_ends.is_empty() || boundary_ends.last().copied() != Some(logical_size) {
+        return Err(PithosError::InvalidMetadata("structural boundaries"));
+    }
+    let mut previous = 0_u64;
+    for &boundary in boundary_ends {
+        if boundary <= previous || boundary > logical_size {
+            return Err(PithosError::InvalidMetadata("structural boundaries"));
+        }
+        previous = boundary;
+    }
+    Ok(())
+}
+
+fn push_relative_chunk(
+    chunks: &mut Vec<LogicalChunkDraft>,
+    origin: ChunkOrigin,
+    relative_offset: u64,
+    length: usize,
+    method: ChunkingMethod,
+    max_chunks: u64,
+) -> Result<()> {
+    let next_count = u64::try_from(chunks.len())
+        .map_err(|_| PithosError::IntegerOverflow)?
+        .checked_add(1)
+        .ok_or(PithosError::IntegerOverflow)?;
+    ensure_chunk_count(next_count, max_chunks)?;
+    let length = u32::try_from(length).map_err(|_| PithosError::IntegerOverflow)?;
+    if length == 0 {
+        return Err(PithosError::InvalidMetadata("zero-length chunk"));
+    }
+    let logical_offset = origin
+        .base_offset
+        .checked_add(relative_offset)
+        .ok_or(PithosError::IntegerOverflow)?;
+    logical_offset
+        .checked_add(u64::from(length))
+        .ok_or(PithosError::IntegerOverflow)?;
+    chunks
+        .try_reserve(1)
+        .map_err(|_| PithosError::MemoryLimit)?;
+    chunks.push(LogicalChunkDraft {
+        entry_id: origin.entry_id,
+        object_id: origin.object_id,
+        logical_offset,
+        length,
+        method,
+    });
+    Ok(())
+}
+
+fn ensure_chunk_count(count: u64, max_chunks: u64) -> Result<()> {
+    if count > max_chunks {
+        Err(PithosError::ResourceLimit("chunk count"))
+    } else {
+        Ok(())
+    }
+}

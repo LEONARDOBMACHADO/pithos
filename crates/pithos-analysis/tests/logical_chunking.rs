@@ -158,6 +158,93 @@ fn fastcdc_is_deterministic_and_covers_the_complete_logical_range() {
 }
 
 #[test]
+fn fastcdc_v2020_boundaries_match_the_frozen_pithos_vector() {
+    let data = deterministic_bytes(6 * MIB as usize + 12_345);
+    let chunks = chunk_fastcdc(
+        &data,
+        ChunkOrigin {
+            entry_id: 0,
+            object_id: 0,
+            base_offset: 0,
+        },
+        &ChunkingConfig::default(),
+    )
+    .unwrap();
+    let pairs = chunks
+        .iter()
+        .map(|chunk| (chunk.logical_offset, chunk.length))
+        .collect::<Vec<_>>();
+    let expected = [
+        (0, 134_468),
+        (134_468, 323_154),
+        (457_622, 270_488),
+        (728_110, 235_960),
+        (964_070, 311_750),
+        (1_275_820, 288_477),
+        (1_564_297, 263_003),
+        (1_827_300, 247_468),
+        (2_074_768, 71_892),
+        (2_146_660, 477_569),
+        (2_624_229, 281_966),
+        (2_906_195, 274_828),
+        (3_181_023, 455_095),
+        (3_636_118, 115_922),
+        (3_752_040, 354_027),
+        (4_106_067, 602_007),
+        (4_708_074, 280_797),
+        (4_988_871, 231_958),
+        (5_220_829, 271_919),
+        (5_492_748, 374_967),
+        (5_867_715, 344_286),
+        (6_212_001, 91_800),
+    ];
+    assert_eq!(pairs, expected);
+
+    let mut encoded = Vec::new();
+    for (offset, length) in pairs {
+        encoded.extend_from_slice(&offset.to_le_bytes());
+        encoded.extend_from_slice(&length.to_le_bytes());
+    }
+    assert_eq!(
+        blake3::hash(&encoded).to_hex().as_str(),
+        "0eae0ffb692f3f31a2a3d2616112fcd0bca04a66ea660083c3826751587b52bc"
+    );
+}
+
+#[test]
+fn fastcdc_resynchronizes_after_a_prefix_insertion() {
+    let original = deterministic_bytes(8 * MIB as usize);
+    let insertion_offset = 97 * KIB as usize;
+    let inserted = deterministic_bytes(4 * KIB as usize);
+    let mut modified = Vec::with_capacity(original.len() + inserted.len());
+    modified.extend_from_slice(&original[..insertion_offset]);
+    modified.extend_from_slice(&inserted);
+    modified.extend_from_slice(&original[insertion_offset..]);
+    let origin = ChunkOrigin {
+        entry_id: 0,
+        object_id: 0,
+        base_offset: 0,
+    };
+    let config = ChunkingConfig::default();
+    let original_ends = chunk_fastcdc(&original, origin, &config)
+        .unwrap()
+        .into_iter()
+        .map(|chunk| chunk.logical_offset + u64::from(chunk.length))
+        .filter(|end| *end > insertion_offset as u64)
+        .collect::<std::collections::BTreeSet<_>>();
+    let shift = inserted.len() as u64;
+    let resynchronized = chunk_fastcdc(&modified, origin, &config)
+        .unwrap()
+        .into_iter()
+        .map(|chunk| chunk.logical_offset + u64::from(chunk.length))
+        .filter(|end| *end > insertion_offset as u64 + shift)
+        .filter(|end| original_ends.contains(&(*end - shift)))
+        .count();
+
+    assert!(resynchronized >= original_ends.len().saturating_sub(3));
+}
+
+#[test]
 fn streaming_fastcdc_matches_the_slice_implementation_exactly() {
     let data = deterministic_bytes(2 * MIB as usize + 73 * KIB as usize + 19);
     let origin = ChunkOrigin {

@@ -10,6 +10,7 @@ pithos-core = { path = "../pithos-core" }
 xxhash-rust.workspace = true
 blake3.workspace = true
 crc32c.workspace = true
+fastcdc.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

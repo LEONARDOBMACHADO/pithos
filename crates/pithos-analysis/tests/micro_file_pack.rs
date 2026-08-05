@@ -34,24 +34,6 @@ fn flattened_entry_ids(plan: &MicroFilePackPlan) -> Vec<u64> {
         .collect()
 }
 
-fn decode_front_coded_paths(plan: &MicroFilePackPlan) -> Vec<Vec<u8>> {
-    plan.packs
-        .iter()
-        .flat_map(|pack| {
-            let mut previous = Vec::new();
-            pack.metadata.paths.iter().map(move |path| {
-                let prefix_len = usize::try_from(path.shared_prefix_len).unwrap();
-                assert!(prefix_len <= previous.len());
-
-                let mut decoded = previous[..prefix_len].to_vec();
-                decoded.extend_from_slice(&path.suffix);
-                previous = decoded.clone();
-                decoded
-            })
-        })
-        .collect()
-}
-
 #[test]
 fn eligibility_is_inclusive_at_64_kib_and_exclusions_are_explicit() {
     let config = ChunkingConfig::default();
@@ -227,23 +209,25 @@ fn zero_byte_files_are_preserved_with_canonical_metadata() {
     assert_eq!(plan.packs.len(), 1);
     let pack = &plan.packs[0];
 
-    assert_eq!(flattened_entry_ids(&plan), vec![10, 11, 12]);
+    assert_eq!(flattened_entry_ids(&plan), vec![11, 10, 12]);
+    plan.validate(&ChunkingConfig::default()).unwrap();
     assert_eq!(
-        decode_front_coded_paths(&plan),
+        pack.metadata.expanded_paths().unwrap(),
         vec![
-            b"src/a.txt".to_vec(),
             b"src/ab.txt".to_vec(),
+            b"src/a.txt".to_vec(),
             b"src/abc.txt".to_vec(),
         ]
     );
     assert_eq!(pack.uncompressed_len, 12);
-    assert_eq!(pack.members[0].length, 0);
+    assert_eq!(pack.members[0].length, 5);
     assert_eq!(pack.members[0].content_offset, 0);
-    assert_eq!(pack.members[1].content_offset, 0);
+    assert_eq!(pack.members[1].length, 0);
+    assert_eq!(pack.members[1].content_offset, 5);
     assert_eq!(pack.members[2].content_offset, 5);
 
     assert_eq!(pack.metadata.base_modified_ns, 90);
-    assert_eq!(pack.metadata.modified_ns_deltas, vec![10, 30, 0]);
+    assert_eq!(pack.metadata.modified_ns_deltas, vec![30, 10, 0]);
     assert_eq!(pack.metadata.mode_dictionary, vec![0o600, 0o644]);
     assert_eq!(
         pack.metadata
@@ -251,11 +235,11 @@ fn zero_byte_files_are_preserved_with_canonical_metadata() {
             .iter()
             .map(|record| record.mode_index)
             .collect::<Vec<_>>(),
-        vec![1, 0, 1]
+        vec![0, 1, 1]
     );
     assert_eq!(pack.metadata.records[0].content_offset, 0);
-    assert_eq!(pack.metadata.records[0].length, 0);
-    assert_eq!(pack.metadata.records[0].file_hash, hash(0xaa));
+    assert_eq!(pack.metadata.records[0].length, 5);
+    assert_eq!(pack.metadata.records[0].file_hash, hash(0xbb));
 }
 
 #[test]
@@ -315,4 +299,33 @@ fn empty_input_has_no_synthetic_pack_or_exclusion() {
     let plan = plan_micro_file_packs(&[], &ChunkingConfig::default()).unwrap();
     assert!(plan.packs.is_empty());
     assert!(plan.excluded.is_empty());
+}
+
+#[test]
+fn compact_metadata_validation_rejects_corrupt_columns_and_offsets() {
+    let inputs = [input(1, "root/a.bin", 3), input(2, "root/b.bin", 5)];
+    let config = ChunkingConfig::default();
+    let plan = plan_micro_file_packs(&inputs, &config).unwrap();
+
+    let mut invalid_prefix = plan.clone();
+    invalid_prefix.packs[0].metadata.paths[0].shared_prefix_len = 1;
+    assert!(matches!(
+        invalid_prefix.validate(&config),
+        Err(PithosError::InvalidMetadata(_))
+    ));
+
+    let mut invalid_offset = plan.clone();
+    invalid_offset.packs[0].metadata.records[1].content_offset += 1;
+    assert!(matches!(
+        invalid_offset.validate(&config),
+        Err(PithosError::InvalidMetadata(_))
+    ));
+
+    let mut timestamp_overflow = plan;
+    timestamp_overflow.packs[0].metadata.base_modified_ns = i64::MAX;
+    timestamp_overflow.packs[0].metadata.modified_ns_deltas[0] = 1;
+    assert!(matches!(
+        timestamp_overflow.validate(&config),
+        Err(PithosError::IntegerOverflow)
+    ));
 }
