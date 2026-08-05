@@ -12,6 +12,8 @@ pub const HEADER_LEN: usize = 96;
 pub const FOOTER_LEN: usize = 64;
 pub const SECTION_ENTRY_LEN: usize = 32;
 pub const GROUP_RECORD_LEN: usize = 48;
+pub const CODEC_REGISTRY_RECORD_LEN: usize = 16;
+pub const CODEC_FLAG_REQUIRED: u32 = 1;
 pub const REQUIRED_RAW_SECTIONS: u32 = 6;
 
 pub const MAJOR_VERSION: u16 = 0;
@@ -174,6 +176,132 @@ impl SectionDirectoryRecord {
             crc32c: read_u32(buffer, 24),
             reserved: read_u32(buffer, 28),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodecRegistryRecord {
+    pub chain_id: u32,
+    pub codec_id: u16,
+    pub codec_version: u16,
+    pub level: i32,
+    pub flags: u32,
+}
+
+impl CodecRegistryRecord {
+    pub const fn store(chain_id: u32) -> Self {
+        Self {
+            chain_id,
+            codec_id: 0,
+            codec_version: 1,
+            level: 0,
+            flags: CODEC_FLAG_REQUIRED,
+        }
+    }
+
+    fn encode(&self) -> [u8; CODEC_REGISTRY_RECORD_LEN] {
+        let mut buffer = [0_u8; CODEC_REGISTRY_RECORD_LEN];
+        buffer[0..4].copy_from_slice(&self.chain_id.to_le_bytes());
+        buffer[4..6].copy_from_slice(&self.codec_id.to_le_bytes());
+        buffer[6..8].copy_from_slice(&self.codec_version.to_le_bytes());
+        buffer[8..12].copy_from_slice(&self.level.to_le_bytes());
+        buffer[12..16].copy_from_slice(&self.flags.to_le_bytes());
+        buffer
+    }
+
+    fn decode(buffer: &[u8]) -> Self {
+        Self {
+            chain_id: read_u32(buffer, 0),
+            codec_id: read_u16(buffer, 4),
+            codec_version: read_u16(buffer, 6),
+            level: read_i32(buffer, 8),
+            flags: read_u32(buffer, 12),
+        }
+    }
+
+    fn validate_for_decode(&self) -> Result<()> {
+        if self.chain_id == 0 {
+            return Err(PithosError::InvalidMetadata(
+                "codec chain zero is reserved for RAW",
+            ));
+        }
+        if self.flags & !CODEC_FLAG_REQUIRED != 0 {
+            return Err(PithosError::InvalidMetadata("unknown codec registry flags"));
+        }
+        let known = self.codec_id <= 3 && self.codec_version == 1;
+        if !known && self.flags & CODEC_FLAG_REQUIRED != 0 {
+            return Err(PithosError::UnsupportedCodec);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodecRegistry {
+    pub records: Vec<CodecRegistryRecord>,
+}
+
+impl CodecRegistry {
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        let count = u32::try_from(self.records.len()).map_err(|_| PithosError::IntegerOverflow)?;
+        let body_len = self
+            .records
+            .len()
+            .checked_mul(CODEC_REGISTRY_RECORD_LEN)
+            .ok_or(PithosError::IntegerOverflow)?;
+        let capacity = 4_usize
+            .checked_add(body_len)
+            .ok_or(PithosError::IntegerOverflow)?;
+        let mut chain_ids = std::collections::BTreeSet::new();
+        let mut output = Vec::with_capacity(capacity);
+        output.extend_from_slice(&count.to_le_bytes());
+        for record in &self.records {
+            if record.chain_id == 0 || !chain_ids.insert(record.chain_id) {
+                return Err(PithosError::InvalidMetadata(
+                    "duplicate or reserved codec chain",
+                ));
+            }
+            output.extend_from_slice(&record.encode());
+        }
+        Ok(output)
+    }
+
+    pub fn decode(input: &[u8], max_records: u32) -> Result<Self> {
+        if input.len() < 4 {
+            return Err(PithosError::InvalidRange);
+        }
+        let count = read_u32(input, 0);
+        if count > max_records {
+            return Err(PithosError::ResourceLimit("codec registry record count"));
+        }
+        let count = usize::try_from(count).map_err(|_| PithosError::IntegerOverflow)?;
+        let body_len = count
+            .checked_mul(CODEC_REGISTRY_RECORD_LEN)
+            .ok_or(PithosError::IntegerOverflow)?;
+        let expected_len = 4_usize
+            .checked_add(body_len)
+            .ok_or(PithosError::IntegerOverflow)?;
+        if input.len() != expected_len {
+            return Err(PithosError::InvalidRange);
+        }
+
+        let mut chain_ids = std::collections::BTreeSet::new();
+        let mut records = Vec::with_capacity(count);
+        for record_bytes in input[4..].chunks_exact(CODEC_REGISTRY_RECORD_LEN) {
+            let record = CodecRegistryRecord::decode(record_bytes);
+            record.validate_for_decode()?;
+            if !chain_ids.insert(record.chain_id) {
+                return Err(PithosError::InvalidMetadata("duplicate codec chain"));
+            }
+            records.push(record);
+        }
+        Ok(Self { records })
+    }
+
+    pub fn chain(&self, chain_id: u32) -> Option<&CodecRegistryRecord> {
+        self.records
+            .iter()
+            .find(|record| record.chain_id == chain_id)
     }
 }
 
@@ -574,6 +702,15 @@ fn read_u32(buffer: &[u8], offset: usize) -> u32 {
     ])
 }
 
+fn read_i32(buffer: &[u8], offset: usize) -> i32 {
+    i32::from_le_bytes([
+        buffer[offset],
+        buffer[offset + 1],
+        buffer[offset + 2],
+        buffer[offset + 3],
+    ])
+}
+
 fn read_u64(buffer: &[u8], offset: usize) -> u64 {
     u64::from_le_bytes([
         buffer[offset],
@@ -702,10 +839,7 @@ mod tests {
     #[test]
     fn codec_registry_rejects_duplicate_chains_and_declared_size_abuse() {
         let duplicate = CodecRegistry {
-            records: vec![
-                CodecRegistryRecord::store(1),
-                CodecRegistryRecord::store(1),
-            ],
+            records: vec![CodecRegistryRecord::store(1), CodecRegistryRecord::store(1)],
         };
         assert!(duplicate.encode().is_err());
 
