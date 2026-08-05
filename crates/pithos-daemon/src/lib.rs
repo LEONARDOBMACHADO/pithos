@@ -1005,15 +1005,7 @@ mod tests {
         )
         .await;
         let job_id = accepted["result"]["job_id"].as_str().unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        let status = rpc(
-            &service,
-            55,
-            3,
-            "job_status",
-            serde_json::json!({"capability_token": token, "job_id": job_id}),
-        )
-        .await;
+        let status = wait_for_job(&service, 55, &token, job_id).await;
         assert_eq!(status["result"]["state"], "failed");
         assert_eq!(status["result"]["error"]["kind"], "resource_limit");
         assert!(!output.exists());
