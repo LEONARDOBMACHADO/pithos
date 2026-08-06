@@ -1,8 +1,12 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{
+    io::{self, Cursor, Read},
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use pithos_analysis::{
-    ChunkFingerprint, ChunkingMethod, FingerprintConfig, FingerprintInput, LogicalChunk,
-    fingerprint_chunks, fingerprint_chunks_with_checkpoint,
+    ChunkFingerprint, ChunkingMethod, FingerprintConfig, FingerprintInput, FullHashPolicy,
+    LogicalChunk, fingerprint_chunks, fingerprint_chunks_with_checkpoint, fingerprint_reader,
+    fingerprint_reader_with_checkpoint,
 };
 use pithos_core::{DecodeLimits, PithosError};
 
@@ -24,7 +28,10 @@ fn fingerprint_config_defaults_are_bounded_and_normative() {
     assert_eq!(config.superfeature_count, 4);
     assert_eq!(config.max_chunk_bytes, 4 * 1024 * 1024);
     assert_eq!(config.max_chunks, DecodeLimits::default().max_chunks);
-    assert_eq!(config.max_total_bytes, DecodeLimits::default().max_original_bytes);
+    assert_eq!(
+        config.max_total_bytes,
+        DecodeLimits::default().max_original_bytes
+    );
     config.validate().unwrap();
 
     for invalid in [
@@ -74,8 +81,31 @@ fn one_chunk_receives_every_compact_fingerprint_and_superfeature() {
     assert_eq!(fingerprint.full_blake3, None);
     assert_eq!(fingerprint.superfeatures.len(), 4);
     assert_eq!(
+        fingerprint.superfeatures.as_slice(),
+        &[
+            4_035_240_308_330_923_769,
+            4_879_917_261_836_866_628,
+            10_844_589_855_720_895_847,
+            12_518_628_049_364_330_038,
+        ]
+    );
+    assert_eq!(
         fingerprint.superfeatures,
         ChunkFingerprint::compute(7, data).unwrap().superfeatures
+    );
+}
+
+#[test]
+fn compact_hashes_match_the_frozen_abc_vector() {
+    let fingerprint = ChunkFingerprint::compute(0, b"abc").unwrap();
+    assert_eq!(fingerprint.xxh3, 0x78af_5f94_892f_3950);
+    assert_eq!(fingerprint.crc32c, 0x364b_3fb7);
+    assert_eq!(
+        fingerprint.blake3_128,
+        [
+            0x64, 0x37, 0xb3, 0xac, 0x38, 0x46, 0x51, 0x33, 0xff, 0xb6, 0x3b, 0x75, 0x27, 0x3a,
+            0x8d, 0xb5,
+        ]
     );
 }
 
@@ -113,7 +143,10 @@ fn batch_is_sorted_deterministically_and_escalates_only_compact_collisions() {
 
     let fingerprints = fingerprint_chunks(&inputs, &FingerprintConfig::default()).unwrap();
     assert_eq!(
-        fingerprints.iter().map(|item| item.chunk_id).collect::<Vec<_>>(),
+        fingerprints
+            .iter()
+            .map(|item| item.chunk_id)
+            .collect::<Vec<_>>(),
         [2, 5, 9]
     );
     assert!(fingerprints[0].full_blake3.is_none());
@@ -146,6 +179,139 @@ fn full_hash_escalation_revalidates_the_compact_identity() {
         Err(PithosError::HashMismatch) | Err(PithosError::InvalidMetadata(_))
     ));
     assert!(corrupted.full_blake3.is_none());
+}
+
+#[test]
+fn paranoid_policy_retains_full_blake3_for_singletons() {
+    let data = b"singleton";
+    let descriptor = chunk(4, data.len());
+    let config = FingerprintConfig {
+        full_hash_policy: FullHashPolicy::Paranoid,
+        ..FingerprintConfig::default()
+    };
+    let fingerprints = fingerprint_chunks(
+        &[FingerprintInput {
+            chunk: &descriptor,
+            data,
+        }],
+        &config,
+    )
+    .unwrap();
+    assert_eq!(
+        fingerprints[0].full_blake3,
+        Some(*blake3::hash(data).as_bytes())
+    );
+}
+
+struct ThrottledReader<R> {
+    inner: R,
+    max_read: usize,
+}
+
+impl<R: Read> Read for ThrottledReader<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let allowed = buffer.len().min(self.max_read);
+        self.inner.read(&mut buffer[..allowed])
+    }
+}
+
+struct FailingReader;
+
+impl Read for FailingReader {
+    fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+        Err(io::Error::other("synthetic fingerprint reader failure"))
+    }
+}
+
+#[test]
+fn streaming_matches_slice_and_rejects_short_or_trailing_input() {
+    let data = vec![0x5a; 257 * 1024 + 19];
+    let descriptor = chunk(11, data.len());
+    let expected = ChunkFingerprint::compute(descriptor.chunk_id, &data).unwrap();
+    for max_read in [1, 7, 64 * 1024] {
+        let actual = fingerprint_reader(
+            &descriptor,
+            ThrottledReader {
+                inner: Cursor::new(&data),
+                max_read,
+            },
+            &FingerprintConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(actual, expected);
+    }
+
+    assert!(matches!(
+        fingerprint_reader(
+            &descriptor,
+            Cursor::new(&data[..data.len() - 1]),
+            &FingerprintConfig::default(),
+        ),
+        Err(PithosError::InvalidMetadata(_))
+    ));
+    let mut trailing = data.clone();
+    trailing.push(0);
+    assert!(matches!(
+        fingerprint_reader(
+            &descriptor,
+            Cursor::new(trailing),
+            &FingerprintConfig::default(),
+        ),
+        Err(PithosError::InvalidMetadata(_))
+    ));
+    assert!(matches!(
+        fingerprint_reader(&descriptor, FailingReader, &FingerprintConfig::default(),),
+        Err(PithosError::Io(_))
+    ));
+    assert!(matches!(
+        fingerprint_reader_with_checkpoint(
+            &descriptor,
+            Cursor::new(&data),
+            &FingerprintConfig::default(),
+            &|| Err(PithosError::Cancelled),
+        ),
+        Err(PithosError::Cancelled)
+    ));
+}
+
+#[test]
+fn parallelism_does_not_change_batch_output() {
+    let payloads = (0_u8..32)
+        .map(|seed| vec![seed; usize::from(seed) * 997 + 1])
+        .collect::<Vec<_>>();
+    let chunks = payloads
+        .iter()
+        .enumerate()
+        .map(|(id, data)| chunk(id as u64, data.len()))
+        .collect::<Vec<_>>();
+    let inputs = chunks
+        .iter()
+        .zip(&payloads)
+        .rev()
+        .map(|(chunk, data)| FingerprintInput { chunk, data })
+        .collect::<Vec<_>>();
+
+    let expected = fingerprint_chunks(
+        &inputs,
+        &FingerprintConfig {
+            parallelism: 1,
+            ..FingerprintConfig::default()
+        },
+    )
+    .unwrap();
+    for parallelism in [2, 4, 8] {
+        assert_eq!(
+            fingerprint_chunks(
+                &inputs,
+                &FingerprintConfig {
+                    parallelism,
+                    ..FingerprintConfig::default()
+                },
+            )
+            .unwrap(),
+            expected
+        );
+    }
 }
 
 #[test]

@@ -11,6 +11,8 @@ xxhash-rust.workspace = true
 blake3.workspace = true
 crc32c.workspace = true
 fastcdc.workspace = true
+rayon.workspace = true
+smallvec.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

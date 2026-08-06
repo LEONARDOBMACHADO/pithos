@@ -496,6 +496,8 @@ dependencies = [
  "fastcdc",
  "pithos-core",
  "proptest",
+ "rayon",
+ "smallvec",
  "xxhash-rust",
 ]
 
