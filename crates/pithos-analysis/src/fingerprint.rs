@@ -1,4 +1,7 @@
-use std::io::{self, Read};
+use std::{
+    io::{self, Read},
+    sync::OnceLock,
+};
 
 use pithos_core::{DecodeLimits, PithosError, Result};
 use rayon::prelude::*;
@@ -10,7 +13,7 @@ use crate::{LogicalChunk, chunking::try_sort_by_checkpoint};
 const MIB: u64 = 1024 * 1024;
 const READ_BUFFER_BYTES: usize = 64 * 1024;
 const ROLLING_BASE: u64 = 0x0000_0100_0000_01b3;
-const FINGERPRINT_WORKER_SCRATCH_BYTES: u64 = 16 * 1024;
+const FINGERPRINT_WORKER_MARGIN_BYTES: u64 = 64 * 1024;
 const FINGERPRINT_FIXED_WORKING_BYTES: u64 = 4 * 1024;
 const FINGERPRINT_PER_CHUNK_MARGIN_BYTES: u64 = 64;
 
@@ -252,13 +255,8 @@ where
     if count > config.max_chunks {
         return Err(PithosError::ResourceLimit("fingerprint chunk count"));
     }
-    ensure_batch_memory_limits(count, config)?;
-
-    let mut ordered = Vec::new();
-    ordered
-        .try_reserve_exact(inputs.len())
-        .map_err(|_| PithosError::MemoryLimit)?;
     let mut total_bytes = 0_u64;
+    let mut largest_chunk = 0_u64;
     for input in inputs {
         checkpoint()?;
         let actual = u64::try_from(input.data.len()).map_err(|_| PithosError::IntegerOverflow)?;
@@ -272,6 +270,19 @@ where
         if total_bytes > config.max_total_bytes {
             return Err(PithosError::ResourceLimit("fingerprint total bytes"));
         }
+        largest_chunk = largest_chunk.max(actual);
+    }
+    ensure_batch_memory_limits(count, largest_chunk, config)?;
+    if inputs.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut ordered = Vec::new();
+    ordered
+        .try_reserve_exact(inputs.len())
+        .map_err(|_| PithosError::MemoryLimit)?;
+    for input in inputs {
+        checkpoint()?;
         ordered.push(input);
     }
     let mut sort_checkpoint = || checkpoint();
@@ -288,24 +299,39 @@ where
             ));
         }
     }
-    if ordered.is_empty() {
-        return Ok(Vec::new());
-    }
-
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(usize::from(config.parallelism).min(ordered.len()).max(1))
         .build()
         .map_err(|_| PithosError::ResourceLimit("fingerprint parallelism"))?;
-    let mut fingerprints = pool.install(|| {
-        ordered
+    let mut slots = Vec::new();
+    slots
+        .try_reserve_exact(ordered.len())
+        .map_err(|_| PithosError::MemoryLimit)?;
+    for _ in 0..ordered.len() {
+        slots.push(OnceLock::<Result<ChunkFingerprint>>::new());
+    }
+    pool.install(|| {
+        slots
             .par_iter()
-            .map(|input| {
-                checkpoint().and_then(|()| {
+            .zip(ordered.par_iter())
+            .for_each(|(slot, input)| {
+                let result = checkpoint().and_then(|()| {
                     fingerprint_bytes(input.chunk.chunk_id, input.data, config, checkpoint)
-                })
-            })
-            .collect::<Result<Vec<_>>>()
-    })?;
+                });
+                let _ = slot.set(result);
+            });
+    });
+
+    let mut fingerprints = Vec::new();
+    fingerprints
+        .try_reserve_exact(slots.len())
+        .map_err(|_| PithosError::MemoryLimit)?;
+    for slot in slots {
+        checkpoint()?;
+        fingerprints.push(slot.into_inner().ok_or(PithosError::InvalidMetadata(
+            "missing fingerprint worker result",
+        ))??);
+    }
     checkpoint()?;
     if config.full_hash_policy == FullHashPolicy::Standard {
         escalate_compact_collisions(&mut fingerprints, &ordered, config, checkpoint)?;
@@ -598,10 +624,14 @@ fn ensure_single_request_limits_u64(length: u64, config: &FingerprintConfig) -> 
     if length > config.max_total_bytes {
         return Err(PithosError::ResourceLimit("fingerprint total bytes"));
     }
-    ensure_batch_memory_limits(1, config)
+    ensure_batch_memory_limits(1, length, config)
 }
 
-fn ensure_batch_memory_limits(count: u64, config: &FingerprintConfig) -> Result<()> {
+fn ensure_batch_memory_limits(
+    count: u64,
+    largest_chunk: u64,
+    config: &FingerprintConfig,
+) -> Result<()> {
     if count == 0 {
         return Ok(());
     }
@@ -615,11 +645,12 @@ fn ensure_batch_memory_limits(count: u64, config: &FingerprintConfig) -> Result<
         return Err(PithosError::ResourceLimit("fingerprint metadata bytes"));
     }
 
-    // At collision analysis these vectors can coexist: canonical input refs,
-    // output fingerprints, collision candidates, and the escalation bitmap.
-    // The explicit margin covers allocator rounding and Vec bookkeeping.
+    // Worker result slots and the final output coexist while results are
+    // materialized. We conservatively add the later collision candidates and
+    // bitmap too. The explicit margin covers allocator rounding/Vec metadata.
     let per_chunk = std::mem::size_of::<&FingerprintInput<'static>>()
-        .checked_add(std::mem::size_of::<ChunkFingerprint>())
+        .checked_add(std::mem::size_of::<OnceLock<Result<ChunkFingerprint>>>())
+        .and_then(|bytes| bytes.checked_add(std::mem::size_of::<ChunkFingerprint>()))
         .and_then(|bytes| bytes.checked_add(std::mem::size_of::<CollisionCandidate>()))
         .and_then(|bytes| bytes.checked_add(std::mem::size_of::<bool>()))
         .and_then(|bytes| {
@@ -628,11 +659,12 @@ fn ensure_batch_memory_limits(count: u64, config: &FingerprintConfig) -> Result<
         .ok_or(PithosError::IntegerOverflow)?;
     let per_chunk = u64::try_from(per_chunk).map_err(|_| PithosError::IntegerOverflow)?;
     let workers = count.min(u64::from(config.parallelism));
+    let worker_scratch = fingerprint_worker_scratch_bytes(largest_chunk, config)?;
     let working_bytes = count
         .checked_mul(per_chunk)
         .and_then(|bytes| {
             workers
-                .checked_mul(FINGERPRINT_WORKER_SCRATCH_BYTES)
+                .checked_mul(worker_scratch)
                 .and_then(|scratch| bytes.checked_add(scratch))
         })
         .and_then(|bytes| bytes.checked_add(FINGERPRINT_FIXED_WORKING_BYTES))
@@ -641,6 +673,31 @@ fn ensure_batch_memory_limits(count: u64, config: &FingerprintConfig) -> Result<
         return Err(PithosError::ResourceLimit("fingerprint working bytes"));
     }
     Ok(())
+}
+
+fn fingerprint_worker_scratch_bytes(length: u64, config: &FingerprintConfig) -> Result<u64> {
+    let regions = u64::from(config.subchunk_count);
+    let total_ring_capacity = regions
+        .checked_mul(u64::from(config.rolling_window))
+        .map(|capacity| capacity.min(length))
+        .ok_or(PithosError::IntegerOverflow)?;
+    let region_structures = u64::try_from(std::mem::size_of::<RollingRegion>())
+        .map_err(|_| PithosError::IntegerOverflow)?
+        .checked_add(
+            u64::try_from(std::mem::size_of::<u64>()).map_err(|_| PithosError::IntegerOverflow)?,
+        )
+        .and_then(|bytes| bytes.checked_add(FINGERPRINT_PER_CHUNK_MARGIN_BYTES))
+        .and_then(|bytes| bytes.checked_mul(regions))
+        .ok_or(PithosError::IntegerOverflow)?;
+    total_ring_capacity
+        .checked_add(region_structures)
+        .and_then(|bytes| {
+            u64::try_from(std::mem::size_of::<FingerprintAccumulator>())
+                .ok()
+                .and_then(|accumulator| bytes.checked_add(accumulator))
+        })
+        .and_then(|bytes| bytes.checked_add(FINGERPRINT_WORKER_MARGIN_BYTES))
+        .ok_or(PithosError::IntegerOverflow)
 }
 
 fn ensure_chunk_size_u64(length: u64, config: &FingerprintConfig) -> Result<()> {

@@ -310,6 +310,14 @@ impl Read for FailingReader {
     }
 }
 
+struct PanicReader;
+
+impl Read for PanicReader {
+    fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+        panic!("resource preflight must reject before reading")
+    }
+}
+
 struct InterruptedReader<'a> {
     data: &'a [u8],
     position: usize,
@@ -583,6 +591,36 @@ fn batch_rejects_mismatched_lengths_duplicate_ids_and_resource_abuse() {
             }],
             &working_limited,
         ),
+        Err(PithosError::ResourceLimit("fingerprint working bytes"))
+    ));
+
+    let rolling_scratch_limited = FingerprintConfig {
+        subchunk_count: 64,
+        superfeature_count: 4,
+        rolling_window: 4096,
+        parallelism: 1,
+        max_working_bytes: 128 * 1024,
+        ..FingerprintConfig::default()
+    };
+    let maximum = chunk(20, 4 * 1024 * 1024);
+    assert!(matches!(
+        fingerprint_reader(&maximum, PanicReader, &rolling_scratch_limited),
+        Err(PithosError::ResourceLimit("fingerprint working bytes"))
+    ));
+
+    let many_chunks = (0_u64..100_000)
+        .map(|chunk_id| chunk(chunk_id, 0))
+        .collect::<Vec<_>>();
+    let many_inputs = many_chunks
+        .iter()
+        .map(|chunk| FingerprintInput { chunk, data: &[] })
+        .collect::<Vec<_>>();
+    let collection_limited = FingerprintConfig {
+        max_working_bytes: 32 * 1024 * 1024,
+        ..FingerprintConfig::default()
+    };
+    assert!(matches!(
+        fingerprint_chunks(&many_inputs, &collection_limited),
         Err(PithosError::ResourceLimit("fingerprint working bytes"))
     ));
 }

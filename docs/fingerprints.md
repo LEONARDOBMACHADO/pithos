@@ -77,8 +77,10 @@ Por padrão, um chunk tem no máximo 4 MiB. Contagem de chunks, soma dos bytes,
 metadata, working set do heap e paralelismo possuem limites explícitos. O
 orçamento de working set inclui conservadoramente o resultado, referências
 ordenadas, candidatos de colisão, bitmap, margem de allocator e scratch por
-worker antes de qualquer alocação proporcional ao lote. Esses mesmos limites
-se aplicam às APIs unitárias e streaming.
+worker antes de qualquer alocação proporcional ao lote. O scratch é derivado do
+maior chunk real, da quantidade de subchunks e da janela rolante, incluindo a
+capacidade de todos os rings. Esses mesmos limites se aplicam às APIs unitárias
+e streaming.
 
 O processamento em lote não publica resultados parciais em erro e retorna
 sempre em ordem crescente de `chunk_id`, independentemente da quantidade de
