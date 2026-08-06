@@ -30,7 +30,8 @@ tornar o parser vulnerável a arquivos malformados.
 | Jobs persistentes, idempotência, eventos, prioridades, quotas e recovery | Implementados |
 | Zstandard, Brotli, LZMA2, seleção determinística e solid groups | Implementados e testados |
 | Logical chunking (FastCDC, fixed, structural e MicroFilePack) | Implementado e testado |
-| Deduplicação, similarity, transforms, recompression, viewer e mount | Fases posteriores |
+| Fingerprints (XXH3, BLAKE3, CRC32C e superfeatures) | Implementados e testados |
+| Exact dedup, transforms, recompression, viewer e mount | Fases posteriores |
 
 Os perfis públicos de empacotamento são:
 
@@ -64,6 +65,9 @@ Agent API JSON, o último perfil é escrito `archive_max`; a CLI e a resposta de
 - cotas de memória e espaço temporário são aplicadas separadamente pelo engine;
 - boundaries lógicos são determinísticos, streaming e validados sem gaps ou
   overlaps, com vetor FastCDC fixado e MicroFilePack metadata-only.
+- fingerprints compactos e completos possuem vetores congelados, limites de
+  recursos, streaming exato e saída paralela determinística; hashes nunca
+  autorizam deduplicação sem a comparação exata da fase seguinte.
 
 O usuário do sistema operacional é a fronteira de segurança do daemon. O
 `path_scope` restringe clientes e automações a raízes canonicalizadas, mas não é
@@ -168,6 +172,8 @@ recompression, viewer e mount, que serão preenchidas nas fases correspondentes.
   jobs, quotas e erros públicos;
 - [`docs/logical-chunking.md`](docs/logical-chunking.md): algoritmos, vetores,
   limites e fronteira format-neutral do chunking;
+- [`docs/fingerprints.md`](docs/fingerprints.md): hashes, superfeatures,
+  escalonamento de colisões, limites e vetores de conformidade;
 - [`docs/adrs/ADRS.md`](docs/adrs/ADRS.md): decisões arquiteturais;
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): fluxo de contribuição e gates locais;
 - [`SECURITY.md`](SECURITY.md): canal e fronteira de segurança.

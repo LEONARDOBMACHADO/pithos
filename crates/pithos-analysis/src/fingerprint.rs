@@ -1,7 +1,4 @@
-use std::{
-    io::{self, Read},
-    sync::OnceLock,
-};
+use std::io::{self, Read};
 
 use pithos_core::{DecodeLimits, PithosError, Result};
 use rayon::prelude::*;
@@ -11,9 +8,14 @@ use xxhash_rust::xxh3::Xxh3;
 use crate::{LogicalChunk, chunking::try_sort_by_checkpoint};
 
 const MIB: u64 = 1024 * 1024;
-const FINGERPRINT_METADATA_BYTES: u64 = 112;
 const READ_BUFFER_BYTES: usize = 64 * 1024;
 const ROLLING_BASE: u64 = 0x0000_0100_0000_01b3;
+const FINGERPRINT_WORKER_SCRATCH_BYTES: u64 = 16 * 1024;
+const FINGERPRINT_FIXED_WORKING_BYTES: u64 = 4 * 1024;
+const FINGERPRINT_PER_CHUNK_MARGIN_BYTES: u64 = 64;
+
+type CompactKey = (u64, u32, [u8; 16]);
+type CollisionCandidate = (CompactKey, usize);
 
 /// Controls when the full 256-bit BLAKE3 value is retained.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -36,6 +38,8 @@ pub struct FingerprintConfig {
     pub max_chunks: u64,
     pub max_total_bytes: u64,
     pub max_metadata_bytes: u64,
+    /// Bounds heap working memory owned by a fingerprint operation.
+    pub max_working_bytes: u64,
     pub parallelism: u16,
 }
 
@@ -51,6 +55,7 @@ impl Default for FingerprintConfig {
             max_chunks: limits.max_chunks,
             max_total_bytes: limits.max_original_bytes,
             max_metadata_bytes: limits.max_metadata_bytes,
+            max_working_bytes: limits.max_metadata_bytes,
             parallelism: 64,
         }
     }
@@ -67,6 +72,7 @@ impl FingerprintConfig {
             || self.max_chunks == 0
             || self.max_total_bytes == 0
             || self.max_metadata_bytes == 0
+            || self.max_working_bytes == 0
             || !(1..=64).contains(&self.parallelism)
         {
             return Err(PithosError::InvalidMetadata("fingerprint configuration"));
@@ -109,30 +115,62 @@ impl ChunkFingerprint {
         config: &FingerprintConfig,
     ) -> Result<Self> {
         config.validate()?;
-        ensure_chunk_size(data.len(), config)?;
+        ensure_single_request_limits(data.len(), config)?;
         fingerprint_bytes(chunk_id, data, config, &|| Ok(()))
     }
 
     /// Atomically retains the full hash after revalidating the compact identity.
     pub fn escalate_full_blake3(&mut self, data: &[u8]) -> Result<()> {
+        self.escalate_full_blake3_with_config(data, &FingerprintConfig::default())
+    }
+
+    /// Configured, bounded variant of [`Self::escalate_full_blake3`].
+    pub fn escalate_full_blake3_with_config(
+        &mut self,
+        data: &[u8],
+        config: &FingerprintConfig,
+    ) -> Result<()> {
+        self.escalate_full_blake3_with_checkpoint(data, config, &|| Ok(()))
+    }
+
+    /// Bounded promotion with cooperative checkpoints between 64 KiB blocks.
+    pub fn escalate_full_blake3_with_checkpoint<F>(
+        &mut self,
+        data: &[u8],
+        config: &FingerprintConfig,
+        checkpoint: &F,
+    ) -> Result<()>
+    where
+        F: Fn() -> Result<()> + Sync,
+    {
+        config.validate()?;
         let length = u32::try_from(data.len()).map_err(|_| PithosError::IntegerOverflow)?;
         if length != self.length {
             return Err(PithosError::InvalidMetadata("fingerprint chunk length"));
         }
-        let full = blake3::hash(data);
+        ensure_single_request_limits(data.len(), config)?;
+
+        let mut xxh3 = Xxh3::new();
+        let mut blake3 = blake3::Hasher::new();
+        let mut crc32c = 0_u32;
+        for block in data.chunks(READ_BUFFER_BYTES) {
+            checkpoint()?;
+            xxh3.update(block);
+            blake3.update(block);
+            crc32c = crc32c::crc32c_append(crc32c, block);
+        }
+        checkpoint()?;
+        let full = blake3.finalize();
         let mut compact = [0_u8; 16];
         compact.copy_from_slice(&full.as_bytes()[..16]);
-        if compact != self.blake3_128
-            || xxhash_rust::xxh3::xxh3_64(data) != self.xxh3
-            || crc32c::crc32c(data) != self.crc32c
-        {
+        if compact != self.blake3_128 || xxh3.digest() != self.xxh3 || crc32c != self.crc32c {
             return Err(PithosError::HashMismatch);
         }
         self.full_blake3 = Some(*full.as_bytes());
         Ok(())
     }
 
-    fn compact_key(&self) -> (u64, u32, [u8; 16]) {
+    fn compact_key(&self) -> CompactKey {
         (self.xxh3, self.length, self.blake3_128)
     }
 }
@@ -159,7 +197,7 @@ where
 {
     config.validate()?;
     let expected = u64::from(chunk.length);
-    ensure_chunk_size_u64(expected, config)?;
+    ensure_single_request_limits_u64(expected, config)?;
     let mut accumulator = FingerprintAccumulator::new(expected, config)?;
     let mut remaining = expected;
     let mut buffer = [0_u8; READ_BUFFER_BYTES];
@@ -179,10 +217,15 @@ where
             Err(error) => return Err(PithosError::Io(error)),
         }
     }
-    checkpoint()?;
     let mut trailing = [0_u8; 1];
-    if reader.read(&mut trailing)? != 0 {
-        return Err(PithosError::InvalidMetadata("trailing fingerprint data"));
+    loop {
+        checkpoint()?;
+        match reader.read(&mut trailing) {
+            Ok(0) => break,
+            Ok(_) => return Err(PithosError::InvalidMetadata("trailing fingerprint data")),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(PithosError::Io(error)),
+        }
     }
     accumulator.finish(chunk.chunk_id, config)
 }
@@ -209,12 +252,7 @@ where
     if count > config.max_chunks {
         return Err(PithosError::ResourceLimit("fingerprint chunk count"));
     }
-    let metadata_bytes = count
-        .checked_mul(FINGERPRINT_METADATA_BYTES)
-        .ok_or(PithosError::IntegerOverflow)?;
-    if metadata_bytes > config.max_metadata_bytes {
-        return Err(PithosError::ResourceLimit("fingerprint metadata bytes"));
-    }
+    ensure_batch_memory_limits(count, config)?;
 
     let mut ordered = Vec::new();
     ordered
@@ -258,37 +296,19 @@ where
         .num_threads(usize::from(config.parallelism).min(ordered.len()).max(1))
         .build()
         .map_err(|_| PithosError::ResourceLimit("fingerprint parallelism"))?;
-    let mut slots = Vec::new();
-    slots
-        .try_reserve_exact(ordered.len())
-        .map_err(|_| PithosError::MemoryLimit)?;
-    for _ in 0..ordered.len() {
-        slots.push(OnceLock::<Result<ChunkFingerprint>>::new());
-    }
-    pool.install(|| {
-        slots
+    let mut fingerprints = pool.install(|| {
+        ordered
             .par_iter()
-            .zip(ordered.par_iter())
-            .for_each(|(slot, input)| {
-                let result = checkpoint().and_then(|()| {
+            .map(|input| {
+                checkpoint().and_then(|()| {
                     fingerprint_bytes(input.chunk.chunk_id, input.data, config, checkpoint)
-                });
-                let _ = slot.set(result);
-            });
-    });
-
-    let mut fingerprints = Vec::new();
-    fingerprints
-        .try_reserve_exact(slots.len())
-        .map_err(|_| PithosError::MemoryLimit)?;
-    for slot in slots {
-        checkpoint()?;
-        fingerprints.push(slot.into_inner().ok_or(PithosError::InvalidMetadata(
-            "missing fingerprint worker result",
-        ))??);
-    }
+                })
+            })
+            .collect::<Result<Vec<_>>>()
+    })?;
+    checkpoint()?;
     if config.full_hash_policy == FullHashPolicy::Standard {
-        escalate_compact_collisions(&mut fingerprints, &ordered, checkpoint)?;
+        escalate_compact_collisions(&mut fingerprints, &ordered, config, checkpoint)?;
     }
     Ok(fingerprints)
 }
@@ -315,6 +335,7 @@ where
 fn escalate_compact_collisions<F>(
     fingerprints: &mut [ChunkFingerprint],
     inputs: &[&FingerprintInput<'_>],
+    config: &FingerprintConfig,
     checkpoint: &F,
 ) -> Result<()>
 where
@@ -359,7 +380,7 @@ where
     {
         checkpoint()?;
         if should_escalate {
-            fingerprint.escalate_full_blake3(input.data)?;
+            fingerprint.escalate_full_blake3_with_checkpoint(input.data, config, checkpoint)?;
         }
     }
     Ok(())
@@ -567,6 +588,61 @@ fn ensure_chunk_size(length: usize, config: &FingerprintConfig) -> Result<()> {
     ensure_chunk_size_u64(length, config)
 }
 
+fn ensure_single_request_limits(length: usize, config: &FingerprintConfig) -> Result<()> {
+    let length = u64::try_from(length).map_err(|_| PithosError::IntegerOverflow)?;
+    ensure_single_request_limits_u64(length, config)
+}
+
+fn ensure_single_request_limits_u64(length: u64, config: &FingerprintConfig) -> Result<()> {
+    ensure_chunk_size_u64(length, config)?;
+    if length > config.max_total_bytes {
+        return Err(PithosError::ResourceLimit("fingerprint total bytes"));
+    }
+    ensure_batch_memory_limits(1, config)
+}
+
+fn ensure_batch_memory_limits(count: u64, config: &FingerprintConfig) -> Result<()> {
+    if count == 0 {
+        return Ok(());
+    }
+    let metadata_bytes = count
+        .checked_mul(
+            u64::try_from(std::mem::size_of::<ChunkFingerprint>())
+                .map_err(|_| PithosError::IntegerOverflow)?,
+        )
+        .ok_or(PithosError::IntegerOverflow)?;
+    if metadata_bytes > config.max_metadata_bytes {
+        return Err(PithosError::ResourceLimit("fingerprint metadata bytes"));
+    }
+
+    // At collision analysis these vectors can coexist: canonical input refs,
+    // output fingerprints, collision candidates, and the escalation bitmap.
+    // The explicit margin covers allocator rounding and Vec bookkeeping.
+    let per_chunk = std::mem::size_of::<&FingerprintInput<'static>>()
+        .checked_add(std::mem::size_of::<ChunkFingerprint>())
+        .and_then(|bytes| bytes.checked_add(std::mem::size_of::<CollisionCandidate>()))
+        .and_then(|bytes| bytes.checked_add(std::mem::size_of::<bool>()))
+        .and_then(|bytes| {
+            bytes.checked_add(usize::try_from(FINGERPRINT_PER_CHUNK_MARGIN_BYTES).ok()?)
+        })
+        .ok_or(PithosError::IntegerOverflow)?;
+    let per_chunk = u64::try_from(per_chunk).map_err(|_| PithosError::IntegerOverflow)?;
+    let workers = count.min(u64::from(config.parallelism));
+    let working_bytes = count
+        .checked_mul(per_chunk)
+        .and_then(|bytes| {
+            workers
+                .checked_mul(FINGERPRINT_WORKER_SCRATCH_BYTES)
+                .and_then(|scratch| bytes.checked_add(scratch))
+        })
+        .and_then(|bytes| bytes.checked_add(FINGERPRINT_FIXED_WORKING_BYTES))
+        .ok_or(PithosError::IntegerOverflow)?;
+    if working_bytes > config.max_working_bytes {
+        return Err(PithosError::ResourceLimit("fingerprint working bytes"));
+    }
+    Ok(())
+}
+
 fn ensure_chunk_size_u64(length: u64, config: &FingerprintConfig) -> Result<()> {
     if length > u64::from(u32::MAX) {
         return Err(PithosError::IntegerOverflow);
@@ -575,4 +651,62 @@ fn ensure_chunk_size_u64(length: u64, config: &FingerprintConfig) -> Result<()> 
         return Err(PithosError::ResourceLimit("fingerprint chunk bytes"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ChunkingMethod;
+
+    fn chunk(chunk_id: u64, length: usize) -> LogicalChunk {
+        LogicalChunk {
+            chunk_id,
+            entry_id: chunk_id,
+            object_id: 0,
+            logical_offset: 0,
+            length: u32::try_from(length).unwrap(),
+            method: ChunkingMethod::FastCdcV2020,
+        }
+    }
+
+    #[test]
+    fn synthetic_compact_collision_fails_closed_before_publication() {
+        let left = b"collision-a";
+        let right = b"collision-b";
+        assert_ne!(blake3::hash(left), blake3::hash(right));
+
+        let chunks = [chunk(1, left.len()), chunk(2, right.len())];
+        let inputs = [
+            FingerprintInput {
+                chunk: &chunks[0],
+                data: left,
+            },
+            FingerprintInput {
+                chunk: &chunks[1],
+                data: right,
+            },
+        ];
+        let config = FingerprintConfig::default();
+        let mut fingerprints = vec![
+            ChunkFingerprint::compute(1, left).unwrap(),
+            ChunkFingerprint::compute(2, right).unwrap(),
+        ];
+        fingerprints[1].xxh3 = fingerprints[0].xxh3;
+        fingerprints[1].blake3_128 = fingerprints[0].blake3_128;
+        fingerprints[1].crc32c = fingerprints[0].crc32c;
+
+        let error = escalate_compact_collisions(
+            &mut fingerprints,
+            &[&inputs[0], &inputs[1]],
+            &config,
+            &|| Ok(()),
+        )
+        .unwrap_err();
+        assert!(matches!(error, PithosError::HashMismatch));
+        assert_eq!(
+            fingerprints[0].full_blake3,
+            Some(*blake3::hash(left).as_bytes())
+        );
+        assert!(fingerprints[1].full_blake3.is_none());
+    }
 }

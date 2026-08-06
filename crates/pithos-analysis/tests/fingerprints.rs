@@ -1,6 +1,8 @@
 use std::{
     io::{self, Cursor, Read},
-    sync::atomic::{AtomicUsize, Ordering},
+    mem::size_of,
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+    thread,
 };
 
 use pithos_analysis::{
@@ -59,12 +61,90 @@ fn fingerprint_config_defaults_are_bounded_and_normative() {
             max_total_bytes: 0,
             ..config
         },
+        FingerprintConfig {
+            max_metadata_bytes: 0,
+            ..config
+        },
+        FingerprintConfig {
+            max_working_bytes: 0,
+            ..config
+        },
+        FingerprintConfig {
+            rolling_window: 0,
+            ..config
+        },
+        FingerprintConfig {
+            rolling_window: 4097,
+            ..config
+        },
+        FingerprintConfig {
+            subchunk_count: 13,
+            ..config
+        },
+        FingerprintConfig {
+            parallelism: 0,
+            ..config
+        },
+        FingerprintConfig {
+            parallelism: 65,
+            ..config
+        },
     ] {
         assert!(matches!(
             invalid.validate(),
             Err(PithosError::InvalidMetadata(_))
         ));
     }
+}
+
+#[test]
+fn rolling_superfeatures_match_large_four_and_three_feature_vectors() {
+    let data = (0..64 * 1024)
+        .scan(0x9e37_79b9_7f4a_7c15_u64, |state, _| {
+            *state ^= *state << 13;
+            *state ^= *state >> 7;
+            *state ^= *state << 17;
+            Some((*state >> 24) as u8)
+        })
+        .collect::<Vec<_>>();
+    let four = ChunkFingerprint::compute(12, &data).unwrap();
+    assert_eq!(
+        four.superfeatures.as_slice(),
+        &[
+            516_916_243_233_388_654,
+            4_424_382_218_447_919_696,
+            6_983_238_759_544_818_765,
+            3_444_815_408_549_078_898,
+        ]
+    );
+
+    let three_config = FingerprintConfig {
+        superfeature_count: 3,
+        ..FingerprintConfig::default()
+    };
+    let three = ChunkFingerprint::compute_with_config(12, &data, &three_config).unwrap();
+    assert_eq!(
+        three.superfeatures.as_slice(),
+        &[
+            9_966_265_271_562_159_218,
+            1_036_113_484_870_203_154,
+            1_633_176_484_281_783_577,
+        ]
+    );
+
+    let mut edited = data.clone();
+    for byte in &mut edited[..data.len() / 12] {
+        *byte ^= 0xa5;
+    }
+    let edited = ChunkFingerprint::compute(12, &edited).unwrap();
+    assert!(
+        four.superfeatures
+            .iter()
+            .zip(&edited.superfeatures)
+            .filter(|(left, right)| left == right)
+            .count()
+            >= 3
+    );
 }
 
 #[test]
@@ -173,12 +253,19 @@ fn full_hash_escalation_revalidates_the_compact_identity() {
         Some(*blake3::hash(data).as_bytes())
     );
 
-    let mut corrupted = ChunkFingerprint::compute(1, data).unwrap();
+    let mut same_length_corruption = ChunkFingerprint::compute(1, data).unwrap();
     assert!(matches!(
-        corrupted.escalate_full_blake3(b"different"),
-        Err(PithosError::HashMismatch) | Err(PithosError::InvalidMetadata(_))
+        same_length_corruption.escalate_full_blake3(b"identitx"),
+        Err(PithosError::HashMismatch)
     ));
-    assert!(corrupted.full_blake3.is_none());
+    assert!(same_length_corruption.full_blake3.is_none());
+
+    let mut wrong_length = ChunkFingerprint::compute(1, data).unwrap();
+    assert!(matches!(
+        wrong_length.escalate_full_blake3(b"different"),
+        Err(PithosError::InvalidMetadata(_))
+    ));
+    assert!(wrong_length.full_blake3.is_none());
 }
 
 #[test]
@@ -220,6 +307,47 @@ struct FailingReader;
 impl Read for FailingReader {
     fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
         Err(io::Error::other("synthetic fingerprint reader failure"))
+    }
+}
+
+struct InterruptedReader<'a> {
+    data: &'a [u8],
+    position: usize,
+    payload_interrupted: bool,
+    trailing_interrupted: bool,
+}
+
+impl Read for InterruptedReader<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if !self.payload_interrupted {
+            self.payload_interrupted = true;
+            return Err(io::Error::from(io::ErrorKind::Interrupted));
+        }
+        if self.position < self.data.len() {
+            let read = buffer.len().min(self.data.len() - self.position);
+            buffer[..read].copy_from_slice(&self.data[self.position..self.position + read]);
+            self.position += read;
+            return Ok(read);
+        }
+        if !self.trailing_interrupted {
+            self.trailing_interrupted = true;
+            return Err(io::Error::from(io::ErrorKind::Interrupted));
+        }
+        Ok(0)
+    }
+}
+
+struct CountingReader<'a> {
+    inner: Cursor<&'a [u8]>,
+    reads: &'a AtomicUsize,
+}
+
+impl Read for CountingReader<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let allowed = buffer.len().min(64 * 1024);
+        let read = self.inner.read(&mut buffer[..allowed])?;
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        Ok(read)
     }
 }
 
@@ -272,6 +400,40 @@ fn streaming_matches_slice_and_rejects_short_or_trailing_input() {
         ),
         Err(PithosError::Cancelled)
     ));
+
+    assert_eq!(
+        fingerprint_reader(
+            &descriptor,
+            InterruptedReader {
+                data: &data,
+                position: 0,
+                payload_interrupted: false,
+                trailing_interrupted: false,
+            },
+            &FingerprintConfig::default(),
+        )
+        .unwrap(),
+        expected
+    );
+
+    let reads = AtomicUsize::new(0);
+    assert!(matches!(
+        fingerprint_reader_with_checkpoint(
+            &descriptor,
+            CountingReader {
+                inner: Cursor::new(data.as_slice()),
+                reads: &reads,
+            },
+            &FingerprintConfig::default(),
+            &|| if reads.load(Ordering::SeqCst) >= 2 {
+                Err(PithosError::Cancelled)
+            } else {
+                Ok(())
+            },
+        ),
+        Err(PithosError::Cancelled)
+    ));
+    assert_eq!(reads.load(Ordering::SeqCst), 2);
 }
 
 #[test]
@@ -366,6 +528,63 @@ fn batch_rejects_mismatched_lengths_duplicate_ids_and_resource_abuse() {
         ),
         Err(PithosError::ResourceLimit(_))
     ));
+
+    assert!(
+        fingerprint_chunks(&[], &FingerprintConfig::default())
+            .unwrap()
+            .is_empty()
+    );
+
+    let exact_chunk_limit = FingerprintConfig {
+        max_chunk_bytes: bytes.len() as u64,
+        ..FingerprintConfig::default()
+    };
+    ChunkFingerprint::compute_with_config(0, &bytes, &exact_chunk_limit).unwrap();
+
+    let metadata_limited = FingerprintConfig {
+        max_metadata_bytes: size_of::<ChunkFingerprint>() as u64 - 1,
+        ..FingerprintConfig::default()
+    };
+    assert!(matches!(
+        ChunkFingerprint::compute_with_config(0, &bytes, &metadata_limited),
+        Err(PithosError::ResourceLimit("fingerprint metadata bytes"))
+    ));
+    assert!(matches!(
+        fingerprint_reader(&first, Cursor::new(bytes), &metadata_limited),
+        Err(PithosError::ResourceLimit("fingerprint metadata bytes"))
+    ));
+
+    let total_limited = FingerprintConfig {
+        max_total_bytes: 15,
+        ..FingerprintConfig::default()
+    };
+    assert!(matches!(
+        fingerprint_chunks(&duplicate_inputs, &total_limited),
+        Err(PithosError::ResourceLimit("fingerprint total bytes"))
+    ));
+    let single_total_limited = FingerprintConfig {
+        max_total_bytes: 7,
+        ..FingerprintConfig::default()
+    };
+    assert!(matches!(
+        ChunkFingerprint::compute_with_config(0, &bytes, &single_total_limited),
+        Err(PithosError::ResourceLimit("fingerprint total bytes"))
+    ));
+
+    let working_limited = FingerprintConfig {
+        max_working_bytes: 1,
+        ..FingerprintConfig::default()
+    };
+    assert!(matches!(
+        fingerprint_chunks(
+            &[FingerprintInput {
+                chunk: &first,
+                data: &bytes,
+            }],
+            &working_limited,
+        ),
+        Err(PithosError::ResourceLimit("fingerprint working bytes"))
+    ));
 }
 
 #[test]
@@ -382,14 +601,51 @@ fn parallel_fingerprinting_observes_thread_safe_cancellation() {
             data: &data,
         },
     ];
-    let calls = AtomicUsize::new(0);
+    let saw_worker = AtomicBool::new(false);
+    let caller = thread::current().id();
 
     assert!(matches!(
         fingerprint_chunks_with_checkpoint(&inputs, &FingerprintConfig::default(), &|| {
-            calls.fetch_add(1, Ordering::Relaxed);
-            Err(PithosError::Cancelled)
+            if thread::current().id() != caller {
+                saw_worker.store(true, Ordering::SeqCst);
+                Err(PithosError::Cancelled)
+            } else {
+                Ok(())
+            }
         }),
         Err(PithosError::Cancelled)
     ));
-    assert!(calls.load(Ordering::Relaxed) > 0);
+    assert!(saw_worker.load(Ordering::SeqCst));
+}
+
+#[test]
+fn full_hash_escalation_is_bounded_and_cancellable() {
+    let data = vec![0x3c; 3 * 64 * 1024];
+    let mut fingerprint = ChunkFingerprint::compute(1, &data).unwrap();
+    let calls = AtomicUsize::new(0);
+    assert!(matches!(
+        fingerprint.escalate_full_blake3_with_checkpoint(
+            &data,
+            &FingerprintConfig::default(),
+            &|| {
+                let call = calls.fetch_add(1, Ordering::SeqCst);
+                if call >= 2 {
+                    Err(PithosError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        ),
+        Err(PithosError::Cancelled)
+    ));
+    assert!(fingerprint.full_blake3.is_none());
+
+    let too_small = FingerprintConfig {
+        max_chunk_bytes: data.len() as u64 - 1,
+        ..FingerprintConfig::default()
+    };
+    assert!(matches!(
+        fingerprint.escalate_full_blake3_with_config(&data, &too_small),
+        Err(PithosError::ResourceLimit("fingerprint chunk bytes"))
+    ));
 }

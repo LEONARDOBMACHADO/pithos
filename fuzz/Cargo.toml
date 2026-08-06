@@ -82,3 +82,10 @@ path = "fuzz_targets/logical_chunking.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "fingerprints"
+path = "fuzz_targets/fingerprints.rs"
+test = false
+doc = false
+bench = false

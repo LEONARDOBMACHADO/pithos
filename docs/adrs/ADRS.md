@@ -78,3 +78,10 @@ Este documento registra as 10 decisões arquiteturais normativas e imutáveis da
 - **Status:** Aceito
 - **Contexto:** Logical chunks precisam ser determinísticos e servir a fingerprints/dedup sem serem confundidos com compression groups. O PAF 0.1-draft atual ainda não possui `ChunkTable` independente.
 - **Decisão:** `pithos-analysis` usa FastCDC v2020 da crate `fastcdc = 4.0.1`, Level1, seed 0 e 64/256/1024 KiB; high-entropy fixed de 1–4 MiB; boundaries estruturais validados; e MicroFilePack metadata-only de 1–16 MiB. Todos os caminhos possuem limites explícitos de chunks, bytes lógicos, metadata e paths, além de variantes cooperativamente canceláveis. Esta etapa permanece format-neutral. A persistência no PAF só será ligada com uma `ChunkTable` explícita durante fingerprints/exact dedup, mantendo separados LogicalChunk, RestoreMap e GroupTable.
+
+---
+
+## ADR-012: Fingerprint Contract & Collision Boundary
+- **Status:** Aceito
+- **Contexto:** O pipeline precisa agrupar chunks rapidamente e localizar similaridade sem transformar hashes probabilísticos em prova de igualdade.
+- **Decisão:** `pithos-analysis` calcula XXH3-64, BLAKE3-128, CRC32C e superfeatures determinísticas em uma passagem. O modo padrão retém BLAKE3-256 para grupos que colidem em `(xxh3, length, blake3_128)`; o modo paranoico o retém sempre. Lotes são limitados, canceláveis, paralelos e ordenados por `chunk_id`. Nenhum hash ou superfeature autoriza deduplicação: exact dedup e comparação byte a byte permanecem uma fase separada, junto da futura persistência em `ChunkTable`.
