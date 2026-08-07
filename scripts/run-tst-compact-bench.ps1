@@ -73,12 +73,16 @@ Write-Host "`n=== Phase analysis benchmark ===" -ForegroundColor Cyan
 & cargo run --release -p pithos-bench --bin pithos-phasebench -- --corpus $corpusPath --results $resultsPath --max-total-mib $PhaseMaxTotalMiB
 $phaseExit = $LASTEXITCODE
 
+Write-Host "`n=== Codec contribution benchmark ===" -ForegroundColor Cyan
+& cargo run --release -p pithos-bench --bin pithos-codecbench -- --corpus $corpusPath --results $resultsPath
+$codecExit = $LASTEXITCODE
+
 Write-Host "`n=== Comparative compression benchmark ===" -ForegroundColor Cyan
 & cargo run --release -p pithos-bench --bin pithos-bench -- --corpus $corpusPath --results $resultsPath
 $benchmarkExit = $LASTEXITCODE
 
 $summaryExit = 0
-if ($benchmarkExit -eq 0) {
+if (($benchmarkExit -eq 0) -and ($codecExit -eq 0)) {
     Write-Host "`n=== Human-readable summary ===" -ForegroundColor Cyan
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'summarize-tst-compact.ps1') -Results $resultsPath
     $summaryExit = $LASTEXITCODE
@@ -92,6 +96,8 @@ $reportNames = @(
     'tools.txt',
     'phase-analysis.jsonl',
     'phase-analysis-summary.json',
+    'codec-benchmark.jsonl',
+    'codec-benchmark.csv',
     'benchmark.jsonl',
     'benchmark.csv',
     'benchmark-summary.md',
@@ -111,6 +117,7 @@ $summaryLines = @(
     "branch=$(& git branch --show-current)",
     "inventory_exit=$inventoryExit",
     "phasebench_exit=$phaseExit",
+    "codecbench_exit=$codecExit",
     "benchmark_exit=$benchmarkExit",
     "summary_exit=$summaryExit",
     "corpus=$corpusPath",
@@ -120,7 +127,7 @@ $summaryLines = @(
 [System.IO.File]::WriteAllLines($summaryPath, [string[]]$summaryLines, $utf8)
 
 Write-Host "`nBenchmark evidence: $evidencePath" -ForegroundColor Green
-if (($inventoryExit -ne 0) -or ($phaseExit -ne 0) -or ($benchmarkExit -ne 0) -or ($summaryExit -ne 0)) {
+if (($inventoryExit -ne 0) -or ($phaseExit -ne 0) -or ($codecExit -ne 0) -or ($benchmarkExit -ne 0) -or ($summaryExit -ne 0)) {
     exit 1
 }
 exit 0
