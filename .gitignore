@@ -9,12 +9,16 @@
 **/*.rs.bk
 
 # Generated archives, daemon state and temporary files
+*.pts
 *.pithos
 *.log
 *.tmp
 /.pithos-state/
 /pithos-state/
 /tmp/
+
+# Local compression benchmark corpus and generated artifacts
+/tst_compact/
 
 # Gate evidence is intentionally versioned, including command logs.
 !/docs/gates/evidence/**/*.log
