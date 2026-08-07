@@ -27,14 +27,17 @@ The working tree should be clean before validation.
 From the repository root:
 
 ```text
-powershell -ExecutionPolicy Bypass -File .\scripts\validate-gate-c3.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; [void][scriptblock]::Create([System.IO.File]::ReadAllText('.\scripts\validate-gate-c3.ps1')); Write-Host 'PARSE_OK'"
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate-gate-c3.ps1
 ```
 
-If using PowerShell 7:
+PowerShell 5.1 or newer is sufficient. PowerShell 7 is not required.
 
-```text
-pwsh -File .\scripts\validate-gate-c3.ps1
-```
+The Windows runner performs the 10,000-run libFuzzer campaign with
+`--sanitizer none`. This keeps Gate C3 focused on deterministic functional fuzzing
+without requiring the Visual Studio C++ AddressSanitizer runtime to be installed
+or added to `PATH`. MSVC AddressSanitizer remains a separate hardening validation
+and is not silently reported as having run.
 
 ### Linux / macOS / bash
 
@@ -48,21 +51,22 @@ chmod +x ./scripts/validate-gate-c3.sh
 Run **one** runner appropriate for the machine. Do not manually repeat individual
 commands unless the runner itself cannot start.
 
-## Commands executed by the runner
+## Commands executed by the Windows runner
 
-The runner records all of the following:
+The Windows runner records all of the following:
 
 ```text
 cargo fmt --all -- --check
-cargo build --workspace --all-targets
+cargo build --workspace --all-targets --all-features
 cargo test -p pithos-analysis --test exact_dedup -- --nocapture
 cargo test -p pithos-analysis --tests -- --nocapture
-cargo test --workspace --all-targets -- --nocapture
+cargo test --workspace --all-targets --all-features -- --nocapture
+cargo test --workspace --all-features --doc -- --nocapture
 cargo clippy -p pithos-analysis --all-targets -- -D warnings
-cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo +nightly check --manifest-path fuzz/Cargo.toml --bin exact_dedup
-cargo +nightly fuzz run exact_dedup -- -runs=10000 -max_len=65536
-cargo llvm-cov --workspace --all-targets --fail-under-lines 80
+cargo +nightly fuzz run --sanitizer none exact_dedup -- -runs=10000 -max_len=65536
+cargo llvm-cov --workspace --all-targets --all-features --fail-under-lines 80
 ```
 
 The evidence directory also records:
@@ -71,12 +75,19 @@ The evidence directory also records:
 branch
 commit SHA
 OS / architecture
+PowerShell version
 rustc --version --verbose
 cargo --version
+rustup toolchain list
 git status --short
 start/end timestamps
 exit code for every command
+fuzz sanitizer mode
 ```
+
+Each command gets a `.log` file even when it produces no output. Native stdout
+and stderr are captured directly through `System.Diagnostics.Process`, avoiding
+PowerShell's `RemoteException` wrappers in the evidence.
 
 ## If a required local tool is missing
 
@@ -130,7 +141,7 @@ The next review closes Gate C3 only when the committed evidence demonstrates:
 - canonical selection is deterministic;
 - parallelism does not alter the plan;
 - resource limits and cancellation fail closed;
-- workspace build/tests/Clippy/format pass;
+- workspace build/tests/doc-tests/Clippy/format pass;
 - exact-dedup fuzz completes 10,000 runs without crash or panic;
 - line coverage remains at least 80%.
 
