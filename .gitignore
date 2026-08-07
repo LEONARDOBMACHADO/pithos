@@ -16,6 +16,9 @@
 /pithos-state/
 /tmp/
 
+# Gate evidence is intentionally versioned, including command logs.
+!/docs/gates/evidence/**/*.log
+
 # Local secrets and editor/OS metadata
 .env
 .env.*
@@ -29,7 +32,7 @@ Thumbs.db
 /.agents/
 /.codex/
 
-# Internal implementation plans and generated gate evidence. Public format,
-# protocol and architecture documentation under docs/ remains versioned.
+# Internal implementation plans remain local. Public format, protocol,
+# architecture documentation and reproducible gate evidence under docs/ are
+# versioned.
 /PITHOS_*.md
-/docs/gates/
