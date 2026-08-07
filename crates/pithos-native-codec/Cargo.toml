@@ -7,9 +7,9 @@ license.workspace = true
 
 [dependencies]
 pithos-core = { path = "../pithos-core" }
+pithos-analysis = { path = "../pithos-analysis" }
 blake3.workspace = true
 zstd.workspace = true
-fastcdc.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
