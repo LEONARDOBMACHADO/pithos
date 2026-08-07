@@ -201,7 +201,7 @@ mod tests {
             operation: Operation::Pack,
             profile: Some("balanced".into()),
             inputs: vec!["a.bin".into()],
-            output: Some("a.bin.pts".into()),
+            output: Some("a.bin.pits".into()),
             original_bytes: Some(1_000),
             result_bytes: Some(625),
             elapsed_ns: 1_000,
