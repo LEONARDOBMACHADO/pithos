@@ -1,8 +1,9 @@
 # Fingerprints de logical chunks
 
-Este documento congela o contrato de fingerprints da Fase 5. A implementação
+Este documento congela o contrato de fingerprints da Fase 3. A implementação
 fica em `pithos-analysis` e recebe os `LogicalChunk`s produzidos pela etapa de
-chunking. Ela ainda não decide deduplicação nem altera o PAF.
+chunking. Fingerprints não decidem deduplicação nem alteram o PAF; o exact dedup
+é uma etapa separada descrita em `docs/exact-dedup.md`.
 
 ## Registro por chunk
 
@@ -15,9 +16,9 @@ Cada `ChunkFingerprint` contém:
 - CRC32C para detecção rápida de corrupção;
 - três ou quatro superfeatures determinísticas para busca de similaridade.
 
-Hashes são sinais de análise, não autorização para descartar bytes. A fase de
-exact dedup deve comparar byte a byte os candidatos antes de compartilhar
-armazenamento ou referências.
+Hashes são sinais de análise, não autorização para descartar bytes. O exact
+dedup implementado em `pithos-analysis` sempre confirma os bytes completos antes
+de produzir uma referência canônica.
 
 ## Política de BLAKE3 completo
 
