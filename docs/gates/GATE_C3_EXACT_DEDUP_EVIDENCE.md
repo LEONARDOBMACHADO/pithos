@@ -27,15 +27,20 @@ The working tree should be clean before validation.
 The Windows implementation lives in `scripts/validate-gate-c3-windows.ps1`.
 `scripts/validate-gate-c3.ps1` is only a compatibility wrapper.
 
+The current Windows runner is `gate-c3-windows-v4` and is intentionally written
+for Windows PowerShell 5.1 compatibility.
+
 From the repository root, first execute the fast runner self-test:
 
 ```text
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate-gate-c3-windows.ps1 -SelfTest
 ```
 
-It must print `SELF_TEST_OK`. This tests PowerShell 5.1 runtime compatibility,
-UTF-8 evidence writing and native-process capture without starting the expensive
-Rust validation.
+It must print `SELF_TEST_OK`. The v4 self-test exercises the same serialization
+paths used by the full run for `environment.txt`, command metadata and
+`SUMMARY.md`, in addition to UTF-8 writing and native-process capture. This is
+intended to catch runner/infrastructure faults before starting the expensive Rust
+validation.
 
 Only after `SELF_TEST_OK`, run the complete Gate C3 validation:
 
@@ -46,8 +51,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate-gate-c3-w
 PowerShell 5.1 or newer is sufficient. PowerShell 7 is not required.
 
 The full runner executes its self-test again before creating the validation run.
-It also writes `BOOTSTRAP.txt` immediately after creating the evidence directory,
-so an unexpected later runner failure still leaves versionable diagnostic evidence.
+It writes `BOOTSTRAP.txt` immediately after creating the evidence directory. If
+an unexpected runner exception still occurs later, it also writes
+`RUNNER_FATAL.txt` with the exception type, message and PowerShell script stack
+trace before exiting with code 2. Therefore a runner failure must still leave
+versionable diagnostics.
 
 The Windows runner performs the 10,000-run libFuzzer campaign with
 `--sanitizer none`. This keeps Gate C3 focused on deterministic functional fuzzing
@@ -136,7 +144,8 @@ docs/gates/evidence/gate-c3-20260807T120000Z/
 ```
 
 Commit the **entire generated directory**, including logs from failed commands.
-Do not delete errors, warnings, panic output or environment metadata.
+Do not delete errors, warnings, panic output, `BOOTSTRAP.txt`, `RUNNER_FATAL.txt`
+or environment metadata.
 
 ```text
 git status --short
