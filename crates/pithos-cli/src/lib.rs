@@ -8,8 +8,9 @@ mod daemon_client;
 
 pub use daemon_client::{DaemonClient, DaemonClientError, default_daemon_state_dir};
 
-pub const PITHOS_EXTENSION: &str = "pts";
+pub const PITHOS_EXTENSION: &str = "phs";
 pub const LEGACY_PITHOS_EXTENSION: &str = "pithos";
+pub const PROVISIONAL_PITHOS_EXTENSION: &str = "pts";
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CliProfile {
@@ -57,19 +58,19 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Empacotar arquivos em um contêiner .pts
+    /// Empacotar arquivos em um contêiner .phs
     Pack {
         #[arg(required = true)]
         inputs: Vec<std::path::PathBuf>,
 
-        /// Output archive. Defaults to <input-name>.pts for one input or files.pts for many.
+        /// Output archive. Defaults to <input-name>.phs for one input or files.phs for many.
         #[arg(short, long)]
         output: Option<std::path::PathBuf>,
 
         #[arg(long, value_enum, default_value_t = CliProfile::Raw)]
         profile: CliProfile,
     },
-    /// Extrair conteúdo de um contêiner .pts (arquivos legados .pithos continuam aceitos)
+    /// Extrair conteúdo de um contêiner .phs (arquivos legados continuam aceitos)
     Unpack {
         archive: std::path::PathBuf,
 
@@ -104,19 +105,19 @@ pub enum Commands {
 
 /// Computes the canonical default archive path without consulting filesystem state.
 ///
-/// One input preserves its full file/directory name and appends `.pts`:
-/// `report.pdf -> report.pdf.pts`, `Project -> Project.pts`.
-/// Multiple inputs intentionally use the predictable `files.pts` name.
+/// One input preserves its full file/directory name and appends `.phs`:
+/// `report.pdf -> report.pdf.phs`, `Project -> Project.phs`.
+/// Multiple inputs intentionally use the predictable `files.phs` name.
 pub fn default_archive_path(inputs: &[PathBuf]) -> PathBuf {
     if inputs.len() == 1 {
         let input = &inputs[0];
         if let Some(file_name) = input.file_name() {
             let mut output_name: OsString = file_name.to_os_string();
-            output_name.push(".pts");
+            output_name.push(".phs");
             return input.with_file_name(output_name);
         }
     }
-    PathBuf::from("files.pts")
+    PathBuf::from("files.phs")
 }
 
 pub fn is_pithos_archive_path(path: &Path) -> bool {
@@ -125,6 +126,7 @@ pub fn is_pithos_archive_path(path: &Path) -> bool {
         .is_some_and(|extension| {
             extension.eq_ignore_ascii_case(PITHOS_EXTENSION)
                 || extension.eq_ignore_ascii_case(LEGACY_PITHOS_EXTENSION)
+                || extension.eq_ignore_ascii_case(PROVISIONAL_PITHOS_EXTENSION)
         })
 }
 
@@ -180,20 +182,21 @@ mod tests {
     }
 
     #[test]
-    fn default_pts_naming_is_predictable() {
+    fn default_phs_naming_is_predictable() {
         assert_eq!(
             default_archive_path(&[PathBuf::from("report.pdf")]),
-            PathBuf::from("report.pdf.pts")
+            PathBuf::from("report.pdf.phs")
         );
         assert_eq!(
             default_archive_path(&[PathBuf::from("folder")]),
-            PathBuf::from("folder.pts")
+            PathBuf::from("folder.phs")
         );
         assert_eq!(
             default_archive_path(&[PathBuf::from("a.bin"), PathBuf::from("b.bin")]),
-            PathBuf::from("files.pts")
+            PathBuf::from("files.phs")
         );
-        assert!(is_pithos_archive_path(Path::new("new.pts")));
+        assert!(is_pithos_archive_path(Path::new("new.phs")));
+        assert!(is_pithos_archive_path(Path::new("provisional.pts")));
         assert!(is_pithos_archive_path(Path::new("legacy.pithos")));
         assert!(!is_pithos_archive_path(Path::new("archive.zip")));
     }
@@ -205,17 +208,17 @@ mod tests {
             "--output-format",
             "json",
             "list",
-            "archive.pts",
+            "archive.phs",
         ])
         .unwrap();
         assert!(matches!(cli.output_format, OutputFormat::Json));
 
-        assert!(Cli::try_parse_from(["pithos", "extract", "archive.pts", "entry.txt"]).is_err());
+        assert!(Cli::try_parse_from(["pithos", "extract", "archive.phs", "entry.txt"]).is_err());
         assert!(
             Cli::try_parse_from([
                 "pithos",
                 "extract",
-                "archive.pts",
+                "archive.phs",
                 "entry.txt",
                 "--stdout",
                 "--output",
