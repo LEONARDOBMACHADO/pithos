@@ -7,7 +7,7 @@ license.workspace = true
 
 [dependencies]
 pithos-core = { path = "../pithos-core" }
-pithos-engine = { path = "../pithos-engine" }
+pithos-engine = { package = "pithos-engine-next", path = "../pithos-engine-next" }
 pithos-format = { path = "../pithos-format" }
 blake3.workspace = true
 crc32c.workspace = true
