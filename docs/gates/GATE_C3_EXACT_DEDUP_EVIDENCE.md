@@ -1,117 +1,139 @@
 # Gate C3 — Exact Dedup Evidence
 
-> Este arquivo deve ser preenchido na máquina de validação e commitado sem
-> remover falhas. Se algum comando falhar, preservar o comando, exit code e
-> output relevante para correção no próximo ciclo.
+Status: implementation complete in `feat/phase3-exact-dedup`; final validation
+must now be executed **locally**. Automatic GitHub Actions validation is disabled.
 
-## Identificação
+The local validation runners create a timestamped directory under
+`docs/gates/evidence/` containing environment information, every command output,
+exit codes and a generated `SUMMARY.md`. Failing logs must be preserved exactly
+as generated.
 
-- Branch: `feat/phase3-exact-dedup`
-- Commit testado: `PREENCHER`
-- Data/hora UTC: `PREENCHER`
-- SO: `PREENCHER`
-- Arquitetura: `PREENCHER`
-- `rustc --version --verbose`: `PREENCHER`
-- `cargo --version`: `PREENCHER`
+## What the developer must run
 
-## Resultado resumido
-
-| Gate | Resultado | Evidência curta |
-|---|---|---|
-| build workspace | PREENCHER | PREENCHER |
-| exact dedup tests | PREENCHER | PREENCHER |
-| analysis tests | PREENCHER | PREENCHER |
-| workspace tests | PREENCHER | PREENCHER |
-| Clippy analysis | PREENCHER | PREENCHER |
-| Clippy workspace | PREENCHER | PREENCHER |
-| rustfmt | PREENCHER | PREENCHER |
-| fuzz target build | PREENCHER | PREENCHER |
-| exact_dedup fuzz 10k | PREENCHER | PREENCHER |
-| coverage >= 80% | PREENCHER | PREENCHER |
-
-## Comandos e outputs
-
-### 1. Build
+First update the local checkout and switch to the implementation branch:
 
 ```text
-PREENCHER output de: cargo build --workspace --all-targets
+git fetch origin
+git switch feat/phase3-exact-dedup
+git pull --ff-only origin feat/phase3-exact-dedup
+git status --short
+git rev-parse HEAD
 ```
 
-### 2. Exact dedup
+The working tree should be clean before validation.
+
+### Windows / PowerShell
+
+From the repository root:
 
 ```text
-PREENCHER output de: cargo test -p pithos-analysis --test exact_dedup
+powershell -ExecutionPolicy Bypass -File .\scripts\validate-gate-c3.ps1
 ```
 
-### 3. Analysis completo
+If using PowerShell 7:
 
 ```text
-PREENCHER output de: cargo test -p pithos-analysis --tests
+pwsh -File .\scripts\validate-gate-c3.ps1
 ```
 
-### 4. Workspace completo
+### Linux / macOS / bash
+
+From the repository root:
 
 ```text
-PREENCHER output de: cargo test --workspace --all-targets
+chmod +x ./scripts/validate-gate-c3.sh
+./scripts/validate-gate-c3.sh
 ```
 
-### 5. Clippy analysis
+Run **one** runner appropriate for the machine. Do not manually repeat individual
+commands unless the runner itself cannot start.
+
+## Commands executed by the runner
+
+The runner records all of the following:
 
 ```text
-PREENCHER output de: cargo clippy -p pithos-analysis --all-targets -- -D warnings
+cargo fmt --all -- --check
+cargo build --workspace --all-targets
+cargo test -p pithos-analysis --test exact_dedup -- --nocapture
+cargo test -p pithos-analysis --tests -- --nocapture
+cargo test --workspace --all-targets -- --nocapture
+cargo clippy -p pithos-analysis --all-targets -- -D warnings
+cargo clippy --workspace --all-targets -- -D warnings
+cargo +nightly check --manifest-path fuzz/Cargo.toml --bin exact_dedup
+cargo +nightly fuzz run exact_dedup -- -runs=10000 -max_len=65536
+cargo llvm-cov --workspace --all-targets --fail-under-lines 80
 ```
 
-### 6. Clippy workspace
+The evidence directory also records:
 
 ```text
-PREENCHER output de: cargo clippy --workspace --all-targets -- -D warnings
+branch
+commit SHA
+OS / architecture
+rustc --version --verbose
+cargo --version
+git status --short
+start/end timestamps
+exit code for every command
 ```
 
-### 7. Rustfmt
+## If a required local tool is missing
+
+Do not edit code merely to make the runner continue. Record the failure first.
+For missing validation tooling, install only the missing tool and rerun the whole
+runner so the committed evidence comes from one complete pass:
 
 ```text
-PREENCHER output de: cargo fmt --all -- --check
+rustup toolchain install nightly
+cargo install cargo-fuzz --locked
+cargo install cargo-llvm-cov --locked
 ```
 
-### 8. Fuzz target build
+`rustfmt` and `clippy` should be available through the repository Rust toolchain.
+If they are missing:
 
 ```text
-PREENCHER output de: cargo check --manifest-path fuzz/Cargo.toml --bin exact_dedup
+rustup component add rustfmt clippy
 ```
 
-### 9. Exact dedup fuzz
+## What must be committed after the run
+
+The runner creates a directory similar to:
 
 ```text
-PREENCHER output de: cargo +nightly fuzz run exact_dedup -- -runs=10000 -max_len=65536
+docs/gates/evidence/gate-c3-20260807T120000Z/
 ```
 
-### 10. Coverage
+Commit the **entire generated directory**, including logs from failed commands.
+Do not delete errors, warnings, panic output or environment metadata.
 
 ```text
-PREENCHER output de: cargo llvm-cov --workspace --all-targets --fail-under-lines 80
+git status --short
+git add docs/gates/evidence/
+git commit -m "test: record local Gate C3 validation evidence"
+git push origin feat/phase3-exact-dedup
 ```
 
-## Erros encontrados
+If `git add` reports that a generated evidence file is ignored, stop and record
+that exact message instead of using `git add -f`; the branch is configured so
+Gate evidence should be trackable normally.
 
-Registrar **todos** os erros, warnings bloqueantes, panics, timeouts ou diferenças
-entre plataformas. Não corrigir silenciosamente este arquivo após uma falha; o
-commit deve preservar a evidência que motivou a correção.
+## Gate C3 acceptance
 
-```text
-PREENCHER ou escrever: nenhum
-```
+The next review closes Gate C3 only when the committed evidence demonstrates:
 
-## Gate C3
+- every beneficial exact duplicate in the versioned corpus is detected;
+- different bytes are never deduplicated;
+- forced compact-hash collision remains safe;
+- forced full-hash collision remains safe because exact bytes are compared;
+- canonical selection is deterministic;
+- parallelism does not alter the plan;
+- resource limits and cancellation fail closed;
+- workspace build/tests/Clippy/format pass;
+- exact-dedup fuzz completes 10,000 runs without crash or panic;
+- line coverage remains at least 80%.
 
-Marcar somente após todos os itens obrigatórios acima passarem:
-
-- [ ] 100% dos duplicates exatos benéficos detectados nos testes versionados;
-- [ ] nenhum false dedup;
-- [ ] simulação de colisão segura;
-- [ ] determinismo entre paralelismo 1 e 4;
-- [ ] limites e cancelamento passam;
-- [ ] fuzz 10.000 runs sem crash/panic;
-- [ ] workspace sem regressão;
-- [ ] coverage >= 80%.
-
-**Decisão:** `PREENCHER: PASS / FAIL`
+If any command fails, the Gate remains open. The committed failure evidence is
+the input for the next correction cycle; the developer should not make unrelated
+implementation changes before that evidence is reviewed.
