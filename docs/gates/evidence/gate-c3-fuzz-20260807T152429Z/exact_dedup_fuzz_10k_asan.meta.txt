@@ -1,0 +1,5 @@
+name=exact_dedup_fuzz_10k_asan
+command=cargo +nightly fuzz run exact_dedup -- -runs=10000 -max_len=65536
+started_utc=2026-08-07T15:24:33.0398561Z
+ended_utc=2026-08-07T15:24:51.6188461Z
+exit_code=0

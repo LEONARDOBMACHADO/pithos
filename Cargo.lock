@@ -502,6 +502,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "pithos-bench"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "pithos-analysis",
+ "pithos-codecs",
+ "pithos-core",
+ "pithos-engine",
+ "pithos-telemetry",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "pithos-cli"
 version = "0.1.0"
 dependencies = [
@@ -617,6 +632,14 @@ name = "pithos-recompress"
 version = "0.1.0"
 dependencies = [
  "pithos-core",
+]
+
+[[package]]
+name = "pithos-telemetry"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

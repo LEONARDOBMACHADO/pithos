@@ -1,0 +1,11 @@
+timestamp_utc=2026-08-07T15:25:36.1839402Z
+repo=C:\Projetos\TESTE
+corpus=C:\Projetos\TESTE\tst_compact
+powershell=5.1.26100.8875
+rustc=rustc 1.95.0 (59807616e 2026-04-14)
+cargo=cargo 1.95.0 (f2d3ce0bd 2026-03-21)
+7z=C:\Program Files\7-Zip\7z.exe
+7zz=NOT_FOUND
+WinRAR=C:\Program Files\WinRAR\WinRAR.exe
+wzzip=NOT_FOUND
+wzunzip=NOT_FOUND
