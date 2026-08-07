@@ -9,6 +9,7 @@
 **/*.rs.bk
 
 # Generated archives, daemon state and temporary files
+*.phs
 *.pts
 *.pithos
 *.log
