@@ -1,0 +1,155 @@
+name: Apply Portability Test Fixes
+
+on:
+  push:
+    branches:
+      - "feat/phase3-exact-dedup"
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: feat/phase3-exact-dedup
+
+      - name: Patch fragile cross-platform tests
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          daemon = Path("crates/pithos-daemon/src/lib.rs")
+          text = daemon.read_text()
+          old = '''        let mut config = DaemonConfig::for_test(temp.path().join("state"));
+                  config.transfer_ttl = std::time::Duration::from_millis(25);
+                  let service = DaemonService::open(config).unwrap();
+          '''
+          new = '''        let mut config = DaemonConfig::for_test(temp.path().join("state"));
+                  // A transfer must remain available long enough for a client that learns
+                  // its path from the persisted terminal result. Tiny millisecond TTLs
+                  // race with scheduler/CI load and test the clock rather than semantics.
+                  config.transfer_ttl = std::time::Duration::from_secs(2);
+                  let service = DaemonService::open(config).unwrap();
+          '''
+          if old not in text:
+              raise SystemExit("daemon TTL block not found")
+          text = text.replace(old, new, 1)
+
+          old = '''        assert_eq!(fs::read(transfer_path).unwrap(), b"2345");
+                  tokio::time::sleep(std::time::Duration::from_millis(75)).await;
+                  assert!(!std::path::Path::new(transfer_path).exists());
+          '''
+          new = '''        assert_eq!(fs::read(transfer_path).unwrap(), b"2345");
+                  let cleanup_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+                  while std::path::Path::new(transfer_path).exists()
+                      && tokio::time::Instant::now() < cleanup_deadline
+                  {
+                      tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                  }
+                  assert!(
+                      !std::path::Path::new(transfer_path).exists(),
+                      "expired transfer was not cleaned within the bounded test window"
+                  );
+          '''
+          if old not in text:
+              raise SystemExit("daemon cleanup assertion block not found")
+          daemon.write_text(text.replace(old, new, 1))
+
+          testkit = Path("crates/pithos-testkit/src/lib.rs")
+          text = testkit.read_text()
+          old = '''    #[cfg(unix)]
+              #[test]
+              fn gate_a_symlinks_and_non_utf8_paths_roundtrip_safely() {
+                  use std::ffi::OsString;
+                  use std::os::unix::ffi::OsStringExt;
+                  use std::os::unix::fs::symlink;
+                  use std::path::PathBuf;
+          '''
+          new = '''    #[cfg(unix)]
+              #[test]
+              fn gate_a_symlinks_roundtrip_safely() {
+                  use std::os::unix::fs::symlink;
+                  use std::path::PathBuf;
+          '''
+          if old not in text:
+              raise SystemExit("combined Unix path test header not found")
+          text = text.replace(old, new, 1)
+          old = '''        symlink("target", source.join("link")).unwrap();
+                  let raw_name = OsString::from_vec(vec![b'n', b'o', b'n', 0xff, b'u', b'8']);
+                  write_bytes(&source.join(&raw_name), b"raw name");
+                  let archive = temp.path().join("paths.pithos");
+          '''
+          new = '''        symlink("target", source.join("link")).unwrap();
+                  let archive = temp.path().join("paths.pithos");
+          '''
+          if old not in text:
+              raise SystemExit("non-UTF8 setup in combined test not found")
+          text = text.replace(old, new, 1)
+          old = '''        assert_eq!(
+                      fs::read_link(restored.join("link")).unwrap(),
+                      PathBuf::from("target")
+                  );
+                  assert_eq!(read_bytes(&restored.join(raw_name)), b"raw name");
+              }
+          }
+          '''
+          new = '''        assert_eq!(
+                      fs::read_link(restored.join("link")).unwrap(),
+                      PathBuf::from("target")
+                  );
+              }
+
+              // Linux filesystems expose arbitrary byte names through OsString. macOS
+              // APIs/filesystems can reject ill-formed byte sequences with EILSEQ, so
+              // the lossless non-UTF8 contract is exercised where such a name can
+              // actually be created; symlink safety remains covered on every Unix.
+              #[cfg(not(target_os = "macos"))]
+              #[test]
+              fn gate_a_non_utf8_unix_path_roundtrips_losslessly() {
+                  use std::ffi::OsString;
+                  use std::os::unix::ffi::OsStringExt;
+
+                  let temp = tempfile::tempdir().unwrap();
+                  let source = temp.path().join("source");
+                  fs::create_dir_all(&source).unwrap();
+                  let raw_name = OsString::from_vec(vec![b'n', b'o', b'n', 0xff, b'u', b'8']);
+                  write_bytes(&source.join(&raw_name), b"raw name");
+                  let archive = temp.path().join("non-utf8-path.pithos");
+                  let restored = temp.path().join("restored");
+                  pack_directory(&source, &archive);
+                  unpack(UnpackRequest {
+                      archive,
+                      output_dir: restored.clone(),
+                  })
+                  .unwrap();
+                  assert_eq!(read_bytes(&restored.join(raw_name)), b"raw name");
+              }
+          }
+          '''
+          if old not in text:
+              raise SystemExit("combined Unix path test tail not found")
+          testkit.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: Install Rustfmt
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt
+          rustup default stable
+
+      - name: Format
+        run: cargo fmt --all
+
+      - name: Commit fixes
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/pithos-daemon/src/lib.rs crates/pithos-testkit/src/lib.rs
+          git commit -m "test: harden transfer TTL and Unix path portability"
+          git push origin HEAD:feat/phase3-exact-dedup
