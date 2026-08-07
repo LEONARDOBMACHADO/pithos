@@ -1,3 +1,5 @@
+#requires -Version 5.1
+
 $ErrorActionPreference = 'Continue'
 Set-StrictMode -Version Latest
 
@@ -9,17 +11,34 @@ $evidenceDir = Join-Path $repo "docs/gates/evidence/gate-c3-$timestamp"
 New-Item -ItemType Directory -Force -Path $evidenceDir | Out-Null
 
 $summary = New-Object System.Collections.Generic.List[object]
+$utf8NoBom = New-Object System.Text.UTF8Encoding -ArgumentList $false
 
 function Write-TextFile {
-    param([string]$Path, [string[]]$Lines)
-    [System.IO.File]::WriteAllLines($Path, $Lines, [System.Text.UTF8Encoding]::new($false))
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Lines
+    )
+    [System.IO.File]::WriteAllLines($Path, $Lines, $utf8NoBom)
+}
+
+function Capture-CommandText {
+    param(
+        [Parameter(Mandatory = $true)][string]$Command,
+        [string[]]$Arguments = @()
+    )
+
+    if ($null -eq (Get-Command $Command -ErrorAction SilentlyContinue)) {
+        return @("COMMAND_NOT_FOUND: $Command")
+    }
+
+    return [string[]](& $Command @Arguments 2>&1 | ForEach-Object { $_.ToString() })
 }
 
 function Invoke-EvidenceCommand {
     param(
-        [string]$Name,
-        [string]$Command,
-        [string[]]$Arguments
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$Command,
+        [string[]]$Arguments = @()
     )
 
     $safeName = ($Name -replace '[^A-Za-z0-9._-]', '_')
@@ -30,12 +49,28 @@ function Invoke-EvidenceCommand {
     Write-Host "$Command $($Arguments -join ' ')"
 
     $started = (Get-Date).ToUniversalTime()
-    $output = & $Command @Arguments 2>&1 | ForEach-Object { $_.ToString() }
-    $exitCode = $LASTEXITCODE
-    if ($null -eq $exitCode) { $exitCode = 0 }
+    $commandInfo = Get-Command $Command -ErrorAction SilentlyContinue
+
+    if ($null -eq $commandInfo) {
+        $output = @("COMMAND_NOT_FOUND: $Command")
+        $exitCode = 127
+    }
+    else {
+        $global:LASTEXITCODE = 0
+        $output = [string[]](& $Command @Arguments 2>&1 | ForEach-Object { $_.ToString() })
+        $exitCode = $LASTEXITCODE
+        if ($null -eq $exitCode) {
+            $exitCode = 0
+        }
+    }
+
     $ended = (Get-Date).ToUniversalTime()
 
-    $output | Tee-Object -FilePath $logPath | ForEach-Object { Write-Host $_ }
+    Write-TextFile -Path $logPath -Lines $output
+    foreach ($line in $output) {
+        Write-Host $line
+    }
+
     Write-TextFile -Path $metaPath -Lines @(
         "name=$Name",
         "command=$Command $($Arguments -join ' ')",
@@ -44,10 +79,11 @@ function Invoke-EvidenceCommand {
         "exit_code=$exitCode"
     )
 
+    $relativeLog = $logPath.Substring($repo.Length).TrimStart('\', '/') -replace '\\', '/'
     $summary.Add([pscustomobject]@{
         Name = $Name
         ExitCode = [int]$exitCode
-        Log = (Resolve-Path -Relative $logPath)
+        Log = $relativeLog
     })
 }
 
@@ -55,19 +91,25 @@ $environmentPath = Join-Path $evidenceDir 'environment.txt'
 $environmentLines = New-Object System.Collections.Generic.List[string]
 $environmentLines.Add("timestamp_utc=$((Get-Date).ToUniversalTime().ToString('o'))")
 $environmentLines.Add("repo=$repo")
-$environmentLines.Add("branch=$(git branch --show-current 2>&1)")
-$environmentLines.Add("commit=$(git rev-parse HEAD 2>&1)")
-$environmentLines.Add("os=$([System.Runtime.InteropServices.RuntimeInformation]::OSDescription)")
-$environmentLines.Add("arch=$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)")
+$environmentLines.Add("powershell_version=$($PSVersionTable.PSVersion.ToString())")
+$environmentLines.Add("powershell_edition=$(if ($PSVersionTable.PSObject.Properties.Name -contains 'PSEdition') { $PSVersionTable.PSEdition } else { 'Desktop' })")
+$environmentLines.Add("branch=$((Capture-CommandText 'git' @('branch', '--show-current')) -join ' ')")
+$environmentLines.Add("commit=$((Capture-CommandText 'git' @('rev-parse', 'HEAD')) -join ' ')")
+$environmentLines.Add("os=$([System.Environment]::OSVersion.VersionString)")
+$environmentLines.Add("is_64bit_os=$([System.Environment]::Is64BitOperatingSystem)")
+$environmentLines.Add("is_64bit_process=$([System.Environment]::Is64BitProcess)")
 $environmentLines.Add('')
 $environmentLines.Add('rustc --version --verbose:')
-$environmentLines.AddRange([string[]](rustc --version --verbose 2>&1 | ForEach-Object { $_.ToString() }))
+$environmentLines.AddRange([string[]](Capture-CommandText 'rustc' @('--version', '--verbose')))
 $environmentLines.Add('')
 $environmentLines.Add('cargo --version:')
-$environmentLines.AddRange([string[]](cargo --version 2>&1 | ForEach-Object { $_.ToString() }))
+$environmentLines.AddRange([string[]](Capture-CommandText 'cargo' @('--version')))
+$environmentLines.Add('')
+$environmentLines.Add('rustup toolchain list:')
+$environmentLines.AddRange([string[]](Capture-CommandText 'rustup' @('toolchain', 'list')))
 $environmentLines.Add('')
 $environmentLines.Add('git status --short:')
-$environmentLines.AddRange([string[]](git status --short 2>&1 | ForEach-Object { $_.ToString() }))
+$environmentLines.AddRange([string[]](Capture-CommandText 'git' @('status', '--short')))
 Write-TextFile -Path $environmentPath -Lines $environmentLines.ToArray()
 
 Invoke-EvidenceCommand '01_fmt' 'cargo' @('fmt', '--all', '--', '--check')
@@ -83,13 +125,18 @@ Invoke-EvidenceCommand '10_coverage_80' 'cargo' @('llvm-cov', '--workspace', '--
 
 $failed = @($summary | Where-Object { $_.ExitCode -ne 0 })
 $summaryPath = Join-Path $evidenceDir 'SUMMARY.md'
+$branchText = (Capture-CommandText 'git' @('branch', '--show-current')) -join ' '
+$commitText = (Capture-CommandText 'git' @('rev-parse', 'HEAD')) -join ' '
+$resultText = if ($failed.Count -eq 0) { 'PASS' } else { 'FAIL' }
+
 $summaryLines = New-Object System.Collections.Generic.List[string]
 $summaryLines.Add('# Gate C3 local validation')
 $summaryLines.Add('')
 $summaryLines.Add("- Timestamp UTC: $timestamp")
-$summaryLines.Add("- Branch: $(git branch --show-current)")
-$summaryLines.Add("- Commit: $(git rev-parse HEAD)")
-$summaryLines.Add("- Result: **$(if ($failed.Count -eq 0) { 'PASS' } else { 'FAIL' })**")
+$summaryLines.Add("- Branch: $branchText")
+$summaryLines.Add("- Commit: $commitText")
+$summaryLines.Add("- PowerShell: $($PSVersionTable.PSVersion.ToString())")
+$summaryLines.Add("- Result: **$resultText**")
 $summaryLines.Add('')
 $summaryLines.Add('| Check | Exit code | Log |')
 $summaryLines.Add('|---|---:|---|')
@@ -101,9 +148,10 @@ if ($failed.Count -gt 0) {
     $summaryLines.Add('## Failures')
     $summaryLines.Add('')
     foreach ($item in $failed) {
-        $summaryLines.Add("- **$($item.Name)** — exit code $($item.ExitCode); preserve the corresponding log unchanged.")
+        $summaryLines.Add("- **$($item.Name)** - exit code $($item.ExitCode); preserve the corresponding log unchanged.")
     }
-} else {
+}
+else {
     $summaryLines.Add('No command failed.')
 }
 $summaryLines.Add('')
