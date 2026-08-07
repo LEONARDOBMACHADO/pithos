@@ -168,29 +168,14 @@ mod tests {
             ("balanced", CliProfile::Balanced),
             ("archive-max", CliProfile::ArchiveMax),
         ] {
-            let cli = Cli::try_parse_from([
-                "pithos",
-                "pack",
-                "input",
-                "--profile",
-                spelling,
-            ])
-            .unwrap();
+            let cli =
+                Cli::try_parse_from(["pithos", "pack", "input", "--profile", spelling]).unwrap();
             assert!(matches!(
                 cli.command,
                 Commands::Pack { profile, .. } if profile == expected
             ));
         }
-        assert!(
-            Cli::try_parse_from([
-                "pithos",
-                "pack",
-                "input",
-                "--profile",
-                "unknown",
-            ])
-            .is_err()
-        );
+        assert!(Cli::try_parse_from(["pithos", "pack", "input", "--profile", "unknown",]).is_err());
     }
 
     #[test]
@@ -216,14 +201,9 @@ mod tests {
 
     #[test]
     fn output_format_is_global_and_extract_requires_one_destination() {
-        let cli = Cli::try_parse_from([
-            "pithos",
-            "--output-format",
-            "json",
-            "list",
-            "archive.pits",
-        ])
-        .unwrap();
+        let cli =
+            Cli::try_parse_from(["pithos", "--output-format", "json", "list", "archive.pits"])
+                .unwrap();
         assert!(matches!(cli.output_format, OutputFormat::Json));
 
         assert!(Cli::try_parse_from(["pithos", "extract", "archive.pits", "entry.txt"]).is_err());

@@ -47,10 +47,7 @@ fn multiple_inputs_default_to_files_pits() {
     std::fs::write(temp.path().join("a.txt"), b"alpha").unwrap();
     std::fs::write(temp.path().join("b.bin"), b"beta").unwrap();
 
-    let packed = invoke(
-        temp.path(),
-        &["pack", "a.txt", "b.bin", "--profile", "raw"],
-    );
+    let packed = invoke(temp.path(), &["pack", "a.txt", "b.bin", "--profile", "raw"]);
     assert_success(&packed);
 
     assert!(temp.path().join("files.pits").is_file());

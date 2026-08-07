@@ -4,7 +4,10 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 #[derive(Debug, Parser)]
-#[command(name = "pithos-bench", about = "Pithos comparative compression benchmark")]
+#[command(
+    name = "pithos-bench",
+    about = "Pithos comparative compression benchmark"
+)]
 struct Args {
     /// Corpus directory. Files below this directory are benchmark inputs.
     #[arg(long, default_value = "tst_compact")]
@@ -34,9 +37,7 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let results = args
-        .results
-        .unwrap_or_else(|| args.corpus.join("results"));
+    let results = args.results.unwrap_or_else(|| args.corpus.join("results"));
     let mut config = BenchmarkConfig::standard(args.corpus, results.clone());
     config.include_individual = !args.combined_only;
     config.include_combined = !args.individual_only;
@@ -44,7 +45,10 @@ fn main() -> ExitCode {
 
     match run_suite(&config) {
         Ok(records) => {
-            let successful = records.iter().filter(|record| record.status == "ok").count();
+            let successful = records
+                .iter()
+                .filter(|record| record.status == "ok")
+                .count();
             println!(
                 "benchmark complete: {} records ({} ok); results: {}",
                 records.len(),

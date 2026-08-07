@@ -136,7 +136,12 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let fingerprint_started = Instant::now();
     let mut fingerprints = Vec::with_capacity(chunks.len());
     for chunk in &chunks {
-        let bytes = chunk_bytes(chunk.entry_id as usize, chunk.logical_offset, chunk.length, &data)?;
+        let bytes = chunk_bytes(
+            chunk.entry_id as usize,
+            chunk.logical_offset,
+            chunk.length,
+            &data,
+        )?;
         fingerprints.push(ChunkFingerprint::compute(chunk.chunk_id, bytes)?);
     }
     let fingerprint_elapsed = fingerprint_started.elapsed();
@@ -152,7 +157,12 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let dedup_started = Instant::now();
     let mut dedup_inputs = Vec::with_capacity(chunks.len());
     for (index, chunk) in chunks.iter().enumerate() {
-        let bytes = chunk_bytes(chunk.entry_id as usize, chunk.logical_offset, chunk.length, &data)?;
+        let bytes = chunk_bytes(
+            chunk.entry_id as usize,
+            chunk.logical_offset,
+            chunk.length,
+            &data,
+        )?;
         dedup_inputs.push(DedupInput {
             chunk,
             fingerprint: &fingerprints[index],
@@ -221,10 +231,7 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     );
     println!(
         "time ms: scan={} chunking={} fingerprint={} exact_dedup={}",
-        summary.scan_ms,
-        summary.chunking_ms,
-        summary.fingerprint_ms,
-        summary.exact_dedup_ms
+        summary.scan_ms, summary.chunking_ms, summary.fingerprint_ms, summary.exact_dedup_ms
     );
     println!("results: {}", results.display());
     Ok(())

@@ -104,7 +104,9 @@ impl RunTelemetry {
             .stages
             .iter()
             .filter(|metric| metric.stage == stage)
-            .fold(0_u128, |total, metric| total + u128::from(metric.elapsed_ns));
+            .fold(0_u128, |total, metric| {
+                total + u128::from(metric.elapsed_ns)
+            });
         Some((elapsed as f64 / self.elapsed_ns as f64) * 100.0)
     }
 }
@@ -164,10 +166,7 @@ impl TelemetryCollector {
 
     pub fn finish(self, original_bytes: Option<u64>, result_bytes: Option<u64>) -> RunTelemetry {
         let elapsed_ns = self.started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
-        let mut stages = self
-            .stages
-            .into_inner()
-            .expect("telemetry mutex poisoned");
+        let mut stages = self.stages.into_inner().expect("telemetry mutex poisoned");
         stages.sort_by_key(|metric| metric.stage);
         RunTelemetry {
             schema_version: TELEMETRY_SCHEMA_VERSION,

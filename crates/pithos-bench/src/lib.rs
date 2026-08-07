@@ -113,8 +113,7 @@ pub fn run_suite(config: &BenchmarkConfig) -> Result<Vec<BenchmarkRecord>, Bench
 
     for case in &cases {
         for profile in &config.profiles {
-            let (record, run_telemetry) =
-                run_pithos_case(case, *profile, &config.results_dir)?;
+            let (record, run_telemetry) = run_pithos_case(case, *profile, &config.results_dir)?;
             write_jsonl(&mut jsonl, &record)?;
             write_jsonl(&mut telemetry, &run_telemetry)?;
             records.push(record);
@@ -442,8 +441,7 @@ fn command_exists(name: &str) -> bool {
 
 fn collect_files(root: &Path, excluded_root: &Path) -> Result<Vec<PathBuf>, std::io::Error> {
     let root = fs::canonicalize(root)?;
-    let excluded =
-        fs::canonicalize(excluded_root).unwrap_or_else(|_| excluded_root.to_path_buf());
+    let excluded = fs::canonicalize(excluded_root).unwrap_or_else(|_| excluded_root.to_path_buf());
     let mut files = Vec::new();
     collect_files_recursive(&root, &excluded, &mut files)?;
     files.sort();
@@ -479,7 +477,9 @@ fn total_file_bytes(inputs: &[PathBuf]) -> Result<u64, std::io::Error> {
 }
 
 pub fn default_case_archive_name(inputs: &[PathBuf]) -> OsString {
-    if inputs.len() == 1 && let Some(name) = inputs[0].file_name() {
+    if inputs.len() == 1
+        && let Some(name) = inputs[0].file_name()
+    {
         let mut output = name.to_os_string();
         output.push(".pits");
         return output;
