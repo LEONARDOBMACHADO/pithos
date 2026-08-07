@@ -6,7 +6,7 @@ use pithos_analysis::{
 use pithos_telemetry::{Operation, Stage, TelemetryCollector, write_jsonl};
 use serde::Serialize;
 use std::fs::{self, File};
-use std::io::{BufWriter, Write};
+use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
@@ -62,7 +62,7 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir_all(&results)?;
     let files = collect_files(&args.corpus, &results)?;
     if files.is_empty() {
-        return Err("benchmark corpus is empty".into());
+        return Err(io::Error::other("benchmark corpus is empty").into());
     }
 
     let declared_bytes = files.iter().try_fold(0_u64, |total, path| {
@@ -70,11 +70,11 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     })?;
     let limit_bytes = args.max_total_mib.saturating_mul(1024 * 1024);
     if declared_bytes > limit_bytes {
-        return Err(format!(
+        return Err(io::Error::other(format!(
             "corpus is {} MiB, above --max-total-mib {}",
             declared_bytes / (1024 * 1024),
             args.max_total_mib
-        )
+        ))
         .into());
     }
 
@@ -236,10 +236,16 @@ fn chunk_bytes<'a>(
     length: u32,
     data: &'a [Vec<u8>],
 ) -> Result<&'a [u8], Box<dyn std::error::Error>> {
-    let entry = data.get(entry_id).ok_or("chunk entry_id outside corpus")?;
+    let entry = data
+        .get(entry_id)
+        .ok_or_else(|| io::Error::other("chunk entry_id outside corpus"))?;
     let start = usize::try_from(logical_offset)?;
-    let end = start.checked_add(length as usize).ok_or("chunk range overflow")?;
-    entry.get(start..end).ok_or_else(|| "chunk range outside input".into())
+    let end = start
+        .checked_add(length as usize)
+        .ok_or_else(|| io::Error::other("chunk range overflow"))?;
+    entry
+        .get(start..end)
+        .ok_or_else(|| io::Error::other("chunk range outside input").into())
 }
 
 fn collect_files(root: &Path, excluded: &Path) -> Result<Vec<PathBuf>, std::io::Error> {
