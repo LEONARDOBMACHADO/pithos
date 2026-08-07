@@ -172,22 +172,20 @@ if (-not $SkipDuplicates) {
             continue
         }
         $source = $candidate[0]
-        for ($copyIndex = 1; $copyIndex -le 2; $copyIndex++) {
-            $duplicateName = "{0}.dup{1}{2}" -f [System.IO.Path]::GetFileNameWithoutExtension($source.Name), $copyIndex, $source.Extension
-            $destination = Join-Path $duplicateRoot $duplicateName
-            Copy-Item -LiteralPath $source.FullName -Destination $destination -Force
-            $hash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
-            $relative = $destination.Substring($corpusPath.Length).TrimStart([char[]]@([char]92, [char]47)).Replace([char]92, [char]47)
-            $sourceRows.Add([pscustomobject]@{
-                relative_path = $relative
-                format = $source.Extension.TrimStart([char]'.').ToLowerInvariant()
-                target_mib = [math]::Round($source.Length / 1MB, 3)
-                actual_mib = [math]::Round($source.Length / 1MB, 3)
-                sha256 = $hash
-                source_url = 'local-byte-exact-copy'
-                source_description = "exact-dedup control copied from $($source.Name)"
-            })
-        }
+        $duplicateName = "{0}.dup1{1}" -f [System.IO.Path]::GetFileNameWithoutExtension($source.Name), $source.Extension
+        $destination = Join-Path $duplicateRoot $duplicateName
+        Copy-Item -LiteralPath $source.FullName -Destination $destination -Force
+        $hash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
+        $relative = $destination.Substring($corpusPath.Length).TrimStart([char[]]@([char]92, [char]47)).Replace([char]92, [char]47)
+        $sourceRows.Add([pscustomobject]@{
+            relative_path = $relative
+            format = $source.Extension.TrimStart([char]'.').ToLowerInvariant()
+            target_mib = [math]::Round($source.Length / 1MB, 3)
+            actual_mib = [math]::Round($source.Length / 1MB, 3)
+            sha256 = $hash
+            source_url = 'local-byte-exact-copy'
+            source_description = "exact-dedup control copied from $($source.Name)"
+        })
     }
 }
 
