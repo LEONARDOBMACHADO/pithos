@@ -19,6 +19,7 @@ members = [
     "crates/pithos-native-codec-v8",
     "crates/pithos-native-codec-v9",
     "crates/pithos-native-codec-v10",
+    "crates/pithos-native-codec-v11",
     "crates/pithos-engine",
     "crates/pithos-engine-next",
     "crates/pithos-agent-api",
