@@ -1,0 +1,21 @@
+[package]
+name = "pithos-engine-next"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+pithos-engine-legacy = { package = "pithos-engine", path = "../pithos-engine" }
+pithos-core = { path = "../pithos-core" }
+pithos-format = { path = "../pithos-format" }
+pithos-codecs = { path = "../pithos-codecs" }
+blake3.workspace = true
+crc32c.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
