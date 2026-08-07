@@ -77,14 +77,23 @@ Write-Host "`n=== Comparative compression benchmark ===" -ForegroundColor Cyan
 & cargo run --release -p pithos-bench --bin pithos-bench -- --corpus $corpusPath --results $resultsPath
 $benchmarkExit = $LASTEXITCODE
 
+$summaryExit = 0
+if ($benchmarkExit -eq 0) {
+    Write-Host "`n=== Human-readable summary ===" -ForegroundColor Cyan
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'summarize-tst-compact.ps1') -Results $resultsPath
+    $summaryExit = $LASTEXITCODE
+}
+
 $reportNames = @(
     'corpus-manifest.csv',
     'corpus-summary.txt',
+    'source-register.csv',
     'tools.txt',
     'phase-analysis.jsonl',
     'phase-analysis-summary.json',
     'benchmark.jsonl',
     'benchmark.csv',
+    'benchmark-summary.md',
     'pithos-telemetry.jsonl'
 )
 foreach ($name in $reportNames) {
@@ -102,6 +111,7 @@ $summaryLines = @(
     "inventory_exit=$inventoryExit",
     "phasebench_exit=$phaseExit",
     "benchmark_exit=$benchmarkExit",
+    "summary_exit=$summaryExit",
     "corpus=$corpusPath",
     "local_results=$resultsPath",
     "versioned_evidence=$evidencePath"
@@ -109,7 +119,7 @@ $summaryLines = @(
 [System.IO.File]::WriteAllLines($summaryPath, [string[]]$summaryLines, $utf8)
 
 Write-Host "`nBenchmark evidence: $evidencePath" -ForegroundColor Green
-if (($inventoryExit -ne 0) -or ($phaseExit -ne 0) -or ($benchmarkExit -ne 0)) {
+if (($inventoryExit -ne 0) -or ($phaseExit -ne 0) -or ($benchmarkExit -ne 0) -or ($summaryExit -ne 0)) {
     exit 1
 }
 exit 0
