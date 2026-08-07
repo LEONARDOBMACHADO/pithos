@@ -1,0 +1,30 @@
+﻿[
+    {
+        "branch":  "feat/03-native-exact-dedup",
+        "commit":  "5c87a996ccd7dc0c8d5d59989f516d7e01e40518",
+        "compressor":  "pithos",
+        "profile":  "archive-max",
+        "original_bytes":  499318122,
+        "archive_bytes":  89024107,
+        "savings_percent":  82.170864,
+        "compress_ms":  143670.523,
+        "verify_ms":  1026.53,
+        "decompress_ms":  1813.503,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    },
+    {
+        "branch":  "feat/03-native-exact-dedup",
+        "commit":  "5c87a996ccd7dc0c8d5d59989f516d7e01e40518",
+        "compressor":  "7zip",
+        "profile":  "lzma2-mx9-solid",
+        "original_bytes":  499318122,
+        "archive_bytes":  86352018,
+        "savings_percent":  82.706012,
+        "compress_ms":  63024.088,
+        "verify_ms":  3175.506,
+        "decompress_ms":  3399.773,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    }
+]
