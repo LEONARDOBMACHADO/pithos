@@ -375,7 +375,7 @@ fn run_external_decompress(
     archive: &Path,
     output: &Path,
 ) -> Result<(), String> {
-    let mut command = match kind {
+    let command = match kind {
         ExternalKind::SevenZip => {
             let mut cmd = Command::new(seven_zip_command());
             cmd.arg("x")
@@ -479,14 +479,12 @@ fn total_file_bytes(inputs: &[PathBuf]) -> Result<u64, std::io::Error> {
 }
 
 pub fn default_case_archive_name(inputs: &[PathBuf]) -> OsString {
-    if inputs.len() == 1 {
-        if let Some(name) = inputs[0].file_name() {
-            let mut output = name.to_os_string();
-            output.push(".pts");
-            return output;
-        }
+    if inputs.len() == 1 && let Some(name) = inputs[0].file_name() {
+        let mut output = name.to_os_string();
+        output.push(".pits");
+        return output;
     }
-    OsString::from("files.pts")
+    OsString::from("files.pits")
 }
 
 fn reset_dir(path: &Path) -> Result<(), std::io::Error> {
@@ -600,11 +598,11 @@ mod tests {
     fn archive_name_preserves_single_input_name_and_uses_files_for_many() {
         assert_eq!(
             default_case_archive_name(&[PathBuf::from("report.pdf")]),
-            OsString::from("report.pdf.pts")
+            OsString::from("report.pdf.pits")
         );
         assert_eq!(
             default_case_archive_name(&[PathBuf::from("a"), PathBuf::from("b")]),
-            OsString::from("files.pts")
+            OsString::from("files.pits")
         );
     }
 
