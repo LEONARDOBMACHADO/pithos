@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install stable Rust
         run: |
@@ -29,7 +29,19 @@ jobs:
           rustup default stable
 
       - name: Format
-        run: cargo fmt --all -- --check
+        id: format
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo fmt --all -- --check 2>&1 | tee fmt.log
+
+      - name: Upload format diagnostics
+        if: failure() && steps.format.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustfmt-diff
+          path: fmt.log
+          if-no-files-found: error
 
       - name: Build workspace
         run: cargo build --workspace --all-targets
@@ -58,7 +70,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install stable Rust
         run: |
@@ -69,14 +81,26 @@ jobs:
         run: cargo build --workspace --all-targets
 
       - name: Test workspace
-        run: cargo test --workspace --all-targets
+        id: cross_tests
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --workspace --all-targets 2>&1 | tee cross-platform-test.log
+
+      - name: Upload test diagnostics
+        if: failure() && steps.cross_tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cross-platform-test-${{ matrix.os }}
+          path: cross-platform-test.log
+          if-no-files-found: error
 
   gate-c3-fuzz:
     name: Gate C3 exact dedup fuzz
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install nightly Rust
         run: rustup toolchain install nightly --profile minimal
