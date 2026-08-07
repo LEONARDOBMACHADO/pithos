@@ -74,12 +74,13 @@ pub fn encode_exact_dedup(input: &[u8], member_lengths: &[u64], level: i32) -> R
     for id in &sequence { repr.extend_from_slice(&id.to_le_bytes()); }
     for record in records { encode_record(record, &mut repr)?; }
     let encoded = zstd::stream::encode_all(Cursor::new(&repr), level)?;
+    let encoded_bytes = encoded.len() as u64;
     Ok((encoded, NativeStats {
         chunk_count: sequence.len() as u32,
         canonical_chunks: canonical.len() as u32,
         gross_duplicate_bytes: dup,
         representation_bytes: repr.len() as u64,
-        encoded_bytes: encoded.len() as u64,
+        encoded_bytes,
     }))
 }
 
