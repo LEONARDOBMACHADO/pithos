@@ -266,7 +266,8 @@ pub(crate) fn read_catalog(
         .section_directory_offset
         .checked_add(directory_length)
         .ok_or(PithosError::IntegerOverflow)?;
-    if header.section_directory_offset != HEADER_LEN as u64 || directory_end > header.footer_offset {
+    if header.section_directory_offset != HEADER_LEN as u64 || directory_end > header.footer_offset
+    {
         return Err(PithosError::InvalidRange);
     }
     let directory = read_exact_vec(
@@ -411,8 +412,8 @@ pub(crate) fn read_catalog(
                 .get(&record.codec_chain_id)
                 .ok_or(PithosError::UnsupportedCodec)?;
             let known_standard = codec.codec_id <= 3 && codec.codec_version == 1;
-            let known_native = codec.codec_id == NATIVE_CODEC_ID
-                && codec.codec_version == NATIVE_CODEC_VERSION;
+            let known_native =
+                codec.codec_id == NATIVE_CODEC_ID && codec.codec_version == NATIVE_CODEC_VERSION;
             if !known_standard && !known_native {
                 return Err(PithosError::UnsupportedCodec);
             }
@@ -448,7 +449,12 @@ pub(crate) fn read_group_payload(
         .max_group_output
         .checked_add(1024 * 1024)
         .ok_or(PithosError::IntegerOverflow)?;
-    let payload = read_exact_vec(file, group.payload_offset, group.group.compressed_len, maximum)?;
+    let payload = read_exact_vec(
+        file,
+        group.payload_offset,
+        group.group.compressed_len,
+        maximum,
+    )?;
     if crc32c::crc32c(&payload) != group.group.payload_crc32c {
         return Err(PithosError::ChecksumMismatch);
     }
@@ -611,7 +617,11 @@ fn parse_registry(bytes: &[u8]) -> Result<BTreeMap<u32, RegistryEntry>> {
     }
     let count = read_u32(bytes, 0)? as usize;
     let expected = 4_usize
-        .checked_add(count.checked_mul(CODEC_RECORD_LEN).ok_or(PithosError::IntegerOverflow)?)
+        .checked_add(
+            count
+                .checked_mul(CODEC_RECORD_LEN)
+                .ok_or(PithosError::IntegerOverflow)?,
+        )
         .ok_or(PithosError::IntegerOverflow)?;
     if expected != bytes.len() || count > 32 {
         return Err(PithosError::InvalidMetadata("codec registry"));
@@ -691,7 +701,12 @@ fn read_checked(
     section: &SectionDirectoryRecord,
     limits: &DecodeLimits,
 ) -> Result<Vec<u8>> {
-    let bytes = read_exact_vec(file, section.offset, section.length, limits.max_metadata_bytes)?;
+    let bytes = read_exact_vec(
+        file,
+        section.offset,
+        section.length,
+        limits.max_metadata_bytes,
+    )?;
     if crc32c::crc32c(&bytes) != section.crc32c {
         return Err(PithosError::ChecksumMismatch);
     }
@@ -733,12 +748,16 @@ fn digest_prefix(
 }
 
 fn read_u16(bytes: &[u8], offset: usize) -> Result<u16> {
-    let data = bytes.get(offset..offset + 2).ok_or(PithosError::InvalidRange)?;
+    let data = bytes
+        .get(offset..offset + 2)
+        .ok_or(PithosError::InvalidRange)?;
     Ok(u16::from_le_bytes([data[0], data[1]]))
 }
 
 fn read_u32(bytes: &[u8], offset: usize) -> Result<u32> {
-    let data = bytes.get(offset..offset + 4).ok_or(PithosError::InvalidRange)?;
+    let data = bytes
+        .get(offset..offset + 4)
+        .ok_or(PithosError::InvalidRange)?;
     Ok(u32::from_le_bytes([data[0], data[1], data[2], data[3]]))
 }
 

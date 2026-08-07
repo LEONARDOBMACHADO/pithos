@@ -1,0 +1,30 @@
+﻿[
+    {
+        "branch":  "feat/07-native-recompression",
+        "commit":  "b6a05c7fc308349f83f45152a597460183dad158",
+        "compressor":  "pithos",
+        "profile":  "archive-max",
+        "original_bytes":  499318122,
+        "archive_bytes":  89024107,
+        "savings_percent":  82.170864,
+        "compress_ms":  379937.701,
+        "verify_ms":  1456.351,
+        "decompress_ms":  2467.122,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    },
+    {
+        "branch":  "feat/07-native-recompression",
+        "commit":  "b6a05c7fc308349f83f45152a597460183dad158",
+        "compressor":  "7zip",
+        "profile":  "lzma2-mx9-solid",
+        "original_bytes":  499318122,
+        "archive_bytes":  86352018,
+        "savings_percent":  82.706012,
+        "compress_ms":  79834.659,
+        "verify_ms":  4485.14,
+        "decompress_ms":  4357.207,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    }
+]
