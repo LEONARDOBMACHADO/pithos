@@ -76,19 +76,21 @@ fn run_standalone(command: Commands, output_format: OutputFormat) -> Result<(), 
             &json!({
                 "version": env!("CARGO_PKG_VERSION"),
                 "format": "PAF 0.1-draft",
-                "extension": ".pts",
-                "legacy_extension": ".pithos",
+                "extension": ".pits",
+                "legacy_extensions": [".phs", ".pts", ".pithos"],
                 "codecs": ["STORE", "Zstandard", "Brotli", "LZMA2"],
                 "profiles": ["raw", "stream", "random", "balanced", "archive-max"],
             }),
-            "Pithos R1 v0.1.0 (PAF 0.1-draft, .pts)\nCodecs implementados: STORE, Zstandard, Brotli, LZMA2\nPerfis: raw, stream, random, balanced, archive-max",
+            "Pithos R1 v0.1.0 (PAF 0.1-draft, .pits)\nCodecs implementados: STORE, Zstandard, Brotli, LZMA2\nPerfis: raw, stream, random, balanced, archive-max",
         )?,
         Commands::Pack {
             inputs,
             output,
             profile,
         } => {
-            let output = output.unwrap_or_else(|| default_archive_path(&inputs));
+            let output = normalize_standalone_output(
+                output.unwrap_or_else(|| default_archive_path(&inputs)),
+            );
             pack(PackRequest {
                 inputs,
                 output: output.clone(),
@@ -172,6 +174,17 @@ fn run_standalone(command: Commands, output_format: OutputFormat) -> Result<(), 
         }
     }
     Ok(())
+}
+
+fn normalize_standalone_output(path: PathBuf) -> PathBuf {
+    if path
+        .parent()
+        .is_some_and(|parent| parent.as_os_str().is_empty())
+    {
+        PathBuf::from(".").join(path)
+    } else {
+        path
+    }
 }
 
 async fn run_daemon(
