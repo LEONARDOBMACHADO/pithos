@@ -164,7 +164,8 @@ pub fn pack_with_limits_and_control(
             return Err(PithosError::MemoryLimit);
         }
         let members = group_members(&sources, plan)?;
-        let capacity = usize::try_from(plan.uncompressed_len).map_err(|_| PithosError::MemoryLimit)?;
+        let capacity =
+            usize::try_from(plan.uncompressed_len).map_err(|_| PithosError::MemoryLimit)?;
         let mut input = Vec::with_capacity(capacity);
         let mut member_lengths = Vec::with_capacity(members.len());
         for source in members {
@@ -173,13 +174,8 @@ pub fn pack_with_limits_and_control(
         }
 
         let standard = encode_standard(&input, profile, cancellation)?;
-        let choice = choose_native_or_standard(
-            &input,
-            &member_lengths,
-            standard,
-            profile,
-            cancellation,
-        )?;
+        let choice =
+            choose_native_or_standard(&input, &member_lengths, standard, profile, cancellation)?;
         let payload_offset = spool.stream_position()?;
         spool.write_all(&choice.payload)?;
         let crc = crc32c::crc32c(&choice.payload);
@@ -274,8 +270,16 @@ pub fn pack_with_limits_and_control(
         SectionType::CodecRegistry,
         &registry_bytes,
     )?);
-    sections.push(write_section(&mut spool, SectionType::EntryTable, &entry_bytes)?);
-    sections.push(write_section(&mut spool, SectionType::GroupTable, &group_bytes)?);
+    sections.push(write_section(
+        &mut spool,
+        SectionType::EntryTable,
+        &entry_bytes,
+    )?);
+    sections.push(write_section(
+        &mut spool,
+        SectionType::GroupTable,
+        &group_bytes,
+    )?);
     sections.push(SectionDirectoryRecord {
         section_type: SectionType::PayloadArea as u16,
         section_version: 1,

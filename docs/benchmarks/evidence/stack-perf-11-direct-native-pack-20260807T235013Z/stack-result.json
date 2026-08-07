@@ -1,0 +1,30 @@
+﻿[
+    {
+        "branch":  "perf/11-direct-native-pack",
+        "commit":  "7bd1deb5d503b6349791cae58e3a469d59ae3f17",
+        "compressor":  "pithos",
+        "profile":  "archive-max",
+        "original_bytes":  499318122,
+        "archive_bytes":  89024107,
+        "savings_percent":  82.170864,
+        "compress_ms":  1658975.668,
+        "verify_ms":  871.7,
+        "decompress_ms":  1533.288,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    },
+    {
+        "branch":  "perf/11-direct-native-pack",
+        "commit":  "7bd1deb5d503b6349791cae58e3a469d59ae3f17",
+        "compressor":  "7zip",
+        "profile":  "lzma2-mx9-solid",
+        "original_bytes":  499318122,
+        "archive_bytes":  86352019,
+        "savings_percent":  82.706011,
+        "compress_ms":  71275.89,
+        "verify_ms":  3367.508,
+        "decompress_ms":  3709.247,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    }
+]

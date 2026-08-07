@@ -218,17 +218,23 @@ fn validate_members(input_len: usize, member_lengths: &[u64]) -> Result<()> {
 }
 
 fn read_u16(bytes: &[u8], offset: usize) -> Result<u16> {
-    let slice = bytes.get(offset..offset + 2).ok_or(PithosError::InvalidRange)?;
+    let slice = bytes
+        .get(offset..offset + 2)
+        .ok_or(PithosError::InvalidRange)?;
     Ok(u16::from_le_bytes([slice[0], slice[1]]))
 }
 
 fn read_u32(bytes: &[u8], offset: usize) -> Result<u32> {
-    let slice = bytes.get(offset..offset + 4).ok_or(PithosError::InvalidRange)?;
+    let slice = bytes
+        .get(offset..offset + 4)
+        .ok_or(PithosError::InvalidRange)?;
     Ok(u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
 }
 
 fn read_u64(bytes: &[u8], offset: usize) -> Result<u64> {
-    let slice = bytes.get(offset..offset + 8).ok_or(PithosError::InvalidRange)?;
+    let slice = bytes
+        .get(offset..offset + 8)
+        .ok_or(PithosError::InvalidRange)?;
     Ok(u64::from_le_bytes([
         slice[0], slice[1], slice[2], slice[3], slice[4], slice[5], slice[6], slice[7],
     ]))
@@ -243,15 +249,14 @@ mod tests {
         let file = vec![b'A'; 2 * 1024 * 1024];
         let mut input = file.clone();
         input.extend_from_slice(&file);
-        let (encoded, stats) = encode_exact_dedup(
-            &input,
-            &[file.len() as u64, file.len() as u64],
-            9,
-        )
-        .unwrap();
+        let (encoded, stats) =
+            encode_exact_dedup(&input, &[file.len() as u64, file.len() as u64], 9).unwrap();
         assert!(stats.canonical_chunks < stats.chunk_count);
         assert!(stats.gross_duplicate_bytes >= file.len() as u64);
-        assert_eq!(decode_exact_dedup(&encoded, input.len() as u64).unwrap(), input);
+        assert_eq!(
+            decode_exact_dedup(&encoded, input.len() as u64).unwrap(),
+            input
+        );
     }
 
     #[test]
@@ -260,6 +265,9 @@ mod tests {
             .map(|index| ((index * 131 + index / 17) % 251) as u8)
             .collect::<Vec<_>>();
         let (encoded, _) = encode_exact_dedup(&input, &[input.len() as u64], 3).unwrap();
-        assert_eq!(decode_exact_dedup(&encoded, input.len() as u64).unwrap(), input);
+        assert_eq!(
+            decode_exact_dedup(&encoded, input.len() as u64).unwrap(),
+            input
+        );
     }
 }
