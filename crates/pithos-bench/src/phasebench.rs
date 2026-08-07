@@ -237,12 +237,12 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn chunk_bytes<'a>(
+fn chunk_bytes(
     entry_id: usize,
     logical_offset: u64,
     length: u32,
-    data: &'a [Vec<u8>],
-) -> Result<&'a [u8], Box<dyn std::error::Error>> {
+    data: &[Vec<u8>],
+) -> Result<&[u8], Box<dyn std::error::Error>> {
     let entry = data
         .get(entry_id)
         .ok_or_else(|| io::Error::other("chunk entry_id outside corpus"))?;
