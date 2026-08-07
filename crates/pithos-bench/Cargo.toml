@@ -1,0 +1,19 @@
+[package]
+name = "pithos-bench"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "pithos-bench"
+path = "src/main.rs"
+
+[dependencies]
+pithos-core = { path = "../pithos-core" }
+pithos-engine = { path = "../pithos-engine" }
+pithos-telemetry = { path = "../pithos-telemetry" }
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
