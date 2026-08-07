@@ -79,7 +79,8 @@ function Invoke-EvidenceCommand {
         "exit_code=$exitCode"
     )
 
-    $relativeLog = $logPath.Substring($repo.Length).TrimStart('\', '/') -replace '\\', '/'
+    $trimChars = [char[]]@([char]92, [char]47)
+    $relativeLog = $logPath.Substring($repo.Length).TrimStart($trimChars) -replace '\\', '/'
     $summary.Add([pscustomobject]@{
         Name = $Name
         ExitCode = [int]$exitCode
