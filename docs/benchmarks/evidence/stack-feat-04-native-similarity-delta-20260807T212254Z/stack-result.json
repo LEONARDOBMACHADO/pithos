@@ -1,0 +1,30 @@
+﻿[
+    {
+        "branch":  "feat/04-native-similarity-delta",
+        "commit":  "58b0999d38deb5f293bc65f887b1a5068a20faf9",
+        "compressor":  "pithos",
+        "profile":  "archive-max",
+        "original_bytes":  499318122,
+        "archive_bytes":  89024107,
+        "savings_percent":  82.170864,
+        "compress_ms":  144846.339,
+        "verify_ms":  905.659,
+        "decompress_ms":  1606.503,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    },
+    {
+        "branch":  "feat/04-native-similarity-delta",
+        "commit":  "58b0999d38deb5f293bc65f887b1a5068a20faf9",
+        "compressor":  "7zip",
+        "profile":  "lzma2-mx9-solid",
+        "original_bytes":  499318122,
+        "archive_bytes":  86352018,
+        "savings_percent":  82.706012,
+        "compress_ms":  72816.749,
+        "verify_ms":  3626.224,
+        "decompress_ms":  3761.358,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    }
+]
