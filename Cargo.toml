@@ -10,6 +10,7 @@ members = [
     "crates/pithos-recompress",
     "crates/pithos-planner",
     "crates/pithos-engine",
+    "crates/pithos-engine-next",
     "crates/pithos-agent-api",
     "crates/pithos-daemon",
     "crates/pithos-cli",
