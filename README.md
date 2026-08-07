@@ -31,7 +31,8 @@ tornar o parser vulnerável a arquivos malformados.
 | Zstandard, Brotli, LZMA2, seleção determinística e solid groups | Implementados e testados |
 | Logical chunking (FastCDC, fixed, structural e MicroFilePack) | Implementado e testado |
 | Fingerprints (XXH3, BLAKE3, CRC32C e superfeatures) | Implementados e testados |
-| Exact dedup, transforms, recompression, viewer e mount | Fases posteriores |
+| Exact dedup format-neutral | Implementado; Gate C3 aguardando execução externa |
+| Similarity, clustering, reordering, transforms, recompression, viewer e mount | Fases posteriores |
 
 Os perfis públicos de empacotamento são:
 
@@ -66,8 +67,12 @@ Agent API JSON, o último perfil é escrito `archive_max`; a CLI e a resposta de
 - boundaries lógicos são determinísticos, streaming e validados sem gaps ou
   overlaps, com vetor FastCDC fixado e MicroFilePack metadata-only.
 - fingerprints compactos e completos possuem vetores congelados, limites de
-  recursos, streaming exato e saída paralela determinística; hashes nunca
-  autorizam deduplicação sem a comparação exata da fase seguinte.
+  recursos, streaming exato e saída paralela determinística;
+- exact dedup usa XXH3/length/BLAKE3 apenas para filtrar candidatos, recalcula
+  BLAKE3 completo quando necessário, confirma bytes, usa canonical tie-break
+  determinístico e rejeita referências sem ganho líquido;
+- exact dedup permanece format-neutral até o Gate C3 ser validado; hashes nunca
+  autorizam compartilhamento físico sem a comparação exata.
 
 O usuário do sistema operacional é a fronteira de segurança do daemon. O
 `path_scope` restringe clientes e automações a raízes canonicalizadas, mas não é
@@ -152,7 +157,7 @@ retoma a sessão após reconexões de transporte.
 | `pithos-format` | records e codificação do PAF |
 | `pithos-io` | publicação atômica e primitivas de I/O |
 | `pithos-codecs` | contrato e backends de codec |
-| `pithos-analysis` | logical chunking, MicroFilePack e análises para dedup/similarity |
+| `pithos-analysis` | logical chunking, MicroFilePack, fingerprints, exact dedup e análises para similarity |
 | `pithos-planner` | custos e decisões globais de encoding |
 | `pithos-engine` | pack, catálogo, verify, extract e unpack |
 | `pithos-agent-api` | contrato JSON-RPC público |
@@ -174,13 +179,19 @@ recompression, viewer e mount, que serão preenchidas nas fases correspondentes.
   limites e fronteira format-neutral do chunking;
 - [`docs/fingerprints.md`](docs/fingerprints.md): hashes, superfeatures,
   escalonamento de colisões, limites e vetores de conformidade;
+- [`docs/exact-dedup.md`](docs/exact-dedup.md): exact dedup, colisões, custo,
+  determinismo e fronteira para a futura `ChunkTable`;
 - [`docs/adrs/ADRS.md`](docs/adrs/ADRS.md): decisões arquiteturais;
+- [`docs/gates/GATE_C3_EXACT_DEDUP_EVIDENCE.md`](docs/gates/GATE_C3_EXACT_DEDUP_EVIDENCE.md):
+  registro reproduzível da validação externa do Gate C3;
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): fluxo de contribuição e gates locais;
 - [`SECURITY.md`](SECURITY.md): canal e fronteira de segurança.
 
-Planos internos, relatórios temporários e evidências geradas de gates ficam fora
-do Git. Testes de regressão e corpora licenciados permanecem versionados porque
-fazem parte do contrato verificável do projeto.
+Relatórios temporários pesados e artefatos brutos de execução podem ficar fora
+do Git. Resumos reproduzíveis de Gates, comandos, versões, resultados e erros que
+fundamentam uma decisão de avanço devem ser versionados em `docs/gates/`. Testes
+de regressão e corpora licenciados permanecem versionados porque fazem parte do
+contrato verificável do projeto.
 
 ## Licença
 
