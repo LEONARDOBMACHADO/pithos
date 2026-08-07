@@ -2,9 +2,13 @@
 
 Pithos é um mecanismo de arquivamento e compactação em Rust, orientado tanto a
 uso humano por CLI quanto a automações e agentes por uma API local. O projeto
-define o contêiner PAF (`.pithos`), preserva paths e links de forma portável e
-prioriza determinismo, integridade verificável, limites de recursos e publicação
-atômica dos resultados.
+define o contêiner PAF com extensão pública **`.pts`**, preserva paths e links de
+forma portável e prioriza determinismo, integridade verificável, limites de
+recursos e publicação atômica dos resultados.
+
+`.pithos` é mantida apenas como extensão legada de leitura durante a transição.
+O formato binário continua sendo identificado pelo próprio PAF, não pela extensão
+do nome do arquivo.
 
 O formato evolui a partir de um baseline RAW/STORE auditável para um portfólio
 de codecs e otimizações estruturais sem sacrificar restauração byte-exact ou
@@ -18,20 +22,25 @@ tornar o parser vulnerável a arquivos malformados.
 - verificar CRC32C e BLAKE3 antes de publicar dados restaurados;
 - oferecer os mesmos fluxos diretamente no processo ou por um daemon local;
 - permitir integração com agentes por JSON-RPC estrito, jobs persistentes,
-  eventos, cancelamento, quotas e retomada de sessão.
+  eventos, cancelamento, quotas e retomada de sessão;
+- medir continuamente razão de compactação, custo temporal e contribuição das
+  fases já implementadas por meio do harness de benchmark local.
 
 ## Estado e escopo atual
 
 | Área | Estado |
 |---|---|
 | PAF 0.1-draft RAW/STORE | Implementado e testado |
+| Extensão pública `.pts` | Implementada; `.pithos` permanece legada |
 | CLI `pack`, `unpack`, `list`, `inspect`, `extract`, `verify`, `capabilities` | Implementado em `standalone` e `daemon` |
+| Naming automático no `pack` | 1 input → `<nome>.pts`; múltiplos → `files.pts` |
 | Agent API local com 12 métodos | Implementada |
 | Jobs persistentes, idempotência, eventos, prioridades, quotas e recovery | Implementados |
 | Zstandard, Brotli, LZMA2, seleção determinística e solid groups | Implementados e testados |
 | Logical chunking (FastCDC, fixed, structural e MicroFilePack) | Implementado e testado |
 | Fingerprints (XXH3, BLAKE3, CRC32C e superfeatures) | Implementados e testados |
-| Exact dedup format-neutral | Implementado; Gate C3 aguardando execução externa |
+| Exact dedup format-neutral | Implementado; fechamento do Gate C3 depende do fuzz ASan externo |
+| Telemetria e benchmark inicial | Implementados antecipadamente para medir a evolução por fase |
 | Similarity, clustering, reordering, transforms, recompression, viewer e mount | Fases posteriores |
 
 Os perfis públicos de empacotamento são:
@@ -59,20 +68,22 @@ Agent API JSON, o último perfil é escrito `archive_max`; a CLI e a resposta de
 - cancelamento e deadlines possuem checkpoints durante I/O;
 - daemon falha fechado quando não consegue persistir uma transição;
 - IPC restrito ao usuário local, sem listener TCP;
-- resultados de jobs e chaves de idempotência sobrevivem a restart.
+- resultados de jobs e chaves de idempotência sobrevivem a restart;
 - cada codec obrigatório possui vetor de bytes e BLAKE3 fixado por teste;
 - perfis comprimidos validam identidade, timestamp, tamanho e hash da entrada
   entre scan, hashing e encoding;
 - cotas de memória e espaço temporário são aplicadas separadamente pelo engine;
 - boundaries lógicos são determinísticos, streaming e validados sem gaps ou
-  overlaps, com vetor FastCDC fixado e MicroFilePack metadata-only.
+  overlaps, com vetor FastCDC fixado e MicroFilePack metadata-only;
 - fingerprints compactos e completos possuem vetores congelados, limites de
   recursos, streaming exato e saída paralela determinística;
 - exact dedup usa XXH3/length/BLAKE3 apenas para filtrar candidatos, recalcula
   BLAKE3 completo quando necessário, confirma bytes, usa canonical tie-break
   determinístico e rejeita referências sem ganho líquido;
-- exact dedup permanece format-neutral até o Gate C3 ser validado; hashes nunca
-  autorizam compartilhamento físico sem a comparação exata.
+- exact dedup permanece format-neutral até a integração física da `ChunkTable`;
+  hashes nunca autorizam compartilhamento físico sem a comparação exata;
+- o benchmark local separa resultados por arquivo e `combined-all` e registra
+  tamanho, ratio, savings, pack/verify/unpack e a sonda de Fase 3 em JSONL/CSV.
 
 O usuário do sistema operacional é a fronteira de segurança do daemon. O
 `path_scope` restringe clientes e automações a raízes canonicalizadas, mas não é
@@ -107,29 +118,85 @@ cargo llvm-cov --workspace --all-targets --fail-under-lines 80
 
 ## Uso standalone
 
-Empacotar uma árvore:
+Empacotar um único arquivo sem informar output cria automaticamente
+`<nome-original>.pts`:
 
 ```text
-cargo run -p pithos-cli --bin pithos -- pack ./dados --output ./backup.pithos --profile balanced
+cargo run -p pithos-cli --bin pithos -- pack ./relatorio.pdf --profile balanced
+# saída: ./relatorio.pdf.pts
+```
+
+Empacotar uma árvore cria `<nome-da-pasta>.pts`:
+
+```text
+cargo run -p pithos-cli --bin pithos -- pack ./dados --profile balanced
+# saída: ./dados.pts
+```
+
+Com múltiplas entradas o nome padrão é `files.pts`:
+
+```text
+cargo run -p pithos-cli --bin pithos -- pack ./a.txt ./b.bin ./foto.png --profile balanced
+# saída: ./files.pts
+```
+
+O nome continua podendo ser controlado explicitamente:
+
+```text
+cargo run -p pithos-cli --bin pithos -- pack ./dados --output ./backup.pts --profile archive-max
 ```
 
 Listar e verificar sem restaurar:
 
 ```text
-cargo run -p pithos-cli --bin pithos -- list ./backup.pithos
-cargo run -p pithos-cli --bin pithos -- verify ./backup.pithos
+cargo run -p pithos-cli --bin pithos -- list ./backup.pts
+cargo run -p pithos-cli --bin pithos -- verify ./backup.pts
 ```
 
 Restaurar todo o archive ou uma única entrada:
 
 ```text
-cargo run -p pithos-cli --bin pithos -- unpack ./backup.pithos --output ./restaurado
+cargo run -p pithos-cli --bin pithos -- unpack ./backup.pts --output ./restaurado
 
-cargo run -p pithos-cli --bin pithos -- extract ./backup.pithos caminho/no/archive.txt --output ./selecionado
+cargo run -p pithos-cli --bin pithos -- extract ./backup.pts caminho/no/archive.txt --output ./selecionado
 ```
 
 Todos os comandos aceitam `--output-format human|json`. O modo padrão é
 `standalone` e não depende do daemon.
+
+## Benchmark e telemetria
+
+O corpus local padrão fica em `tst_compact/` e não é versionado. A especificação
+do corpus está em [`docs/benchmarks/TST_COMPACT_CORPUS.md`](docs/benchmarks/TST_COMPACT_CORPUS.md).
+
+Inventariar os arquivos e gerar SHA-256:
+
+```text
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\inventory-tst-compact.ps1
+```
+
+Medir somente a análise já implementada da Fase 3:
+
+```text
+cargo run --release -p pithos-bench --bin pithos-phasebench -- --corpus ./tst_compact
+```
+
+Executar a bateria completa, incluindo comparadores externos encontrados:
+
+```text
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-tst-compact-bench.ps1
+```
+
+A bateria produz resultados individuais e combinados para Pithos `balanced` e
+`archive-max`. 7-Zip, WinRAR e WinZip entram automaticamente quando suas CLIs
+estiverem disponíveis. Os artefatos grandes ficam em `tst_compact/results/work/`;
+somente manifesto, métricas e relatórios pequenos são copiados para
+`docs/benchmarks/evidence/`.
+
+A sonda da Fase 3 mede atualmente scan, FastCDC, fingerprints e exact dedup. O
+`net_saved_bytes` de dedup é ganho potencial enquanto a `ChunkTable` ainda não
+estiver integrada ao PAF; depois dessa integração, o mesmo corpus será reutilizado
+para medir a economia física efetiva do `.pts`.
 
 ## Uso com `pithosd`
 
@@ -142,7 +209,7 @@ cargo run -p pithos-daemon --bin pithosd -- --state-dir ./.pithos-state --allow-
 Em outro terminal, use a mesma state directory e selecione o modo daemon:
 
 ```text
-cargo run -p pithos-cli --bin pithos -- --mode daemon --daemon-state-dir ./.pithos-state pack ./dados --output ./backup.pithos --profile balanced
+cargo run -p pithos-cli --bin pithos -- --mode daemon --daemon-state-dir ./.pithos-state pack ./dados --output ./backup.pts --profile balanced
 ```
 
 O transporte é Named Pipe no Windows e Unix Domain Socket no Unix. Não existe
@@ -163,10 +230,12 @@ retoma a sessão após reconexões de transporte.
 | `pithos-agent-api` | contrato JSON-RPC público |
 | `pithos-daemon` | IPC, sessões, scheduler, jobs e persistência |
 | `pithos-cli` | interface de linha de comando e cliente do daemon |
+| `pithos-telemetry` | contrato estável de métricas e JSONL por operação/fase |
+| `pithos-bench` | benchmark Pithos, sonda de Fase 3 e comparadores externos |
 | `pithos-testkit` | corpus determinístico e testes de integração |
 
-Os demais crates do workspace reservam fronteiras para análise, transforms,
-recompression, viewer e mount, que serão preenchidas nas fases correspondentes.
+Os demais crates do workspace reservam fronteiras para transforms, recompression,
+viewer e mount, que serão preenchidas nas fases correspondentes.
 
 ## Documentação versionada
 
@@ -181,6 +250,8 @@ recompression, viewer e mount, que serão preenchidas nas fases correspondentes.
   escalonamento de colisões, limites e vetores de conformidade;
 - [`docs/exact-dedup.md`](docs/exact-dedup.md): exact dedup, colisões, custo,
   determinismo e fronteira para a futura `ChunkTable`;
+- [`docs/benchmarks/TST_COMPACT_CORPUS.md`](docs/benchmarks/TST_COMPACT_CORPUS.md):
+  corpus local, tamanhos, formatos, naming `.pts` e execução dos benchmarks;
 - [`docs/adrs/ADRS.md`](docs/adrs/ADRS.md): decisões arquiteturais;
 - [`docs/gates/GATE_C3_EXACT_DEDUP_EVIDENCE.md`](docs/gates/GATE_C3_EXACT_DEDUP_EVIDENCE.md):
   registro reproduzível da validação externa do Gate C3;
@@ -189,9 +260,9 @@ recompression, viewer e mount, que serão preenchidas nas fases correspondentes.
 
 Relatórios temporários pesados e artefatos brutos de execução podem ficar fora
 do Git. Resumos reproduzíveis de Gates, comandos, versões, resultados e erros que
-fundamentam uma decisão de avanço devem ser versionados em `docs/gates/`. Testes
-de regressão e corpora licenciados permanecem versionados porque fazem parte do
-contrato verificável do projeto.
+fundamentam uma decisão de avanço devem ser versionados. Testes de regressão e
+corpora pequenos/licenciados permanecem versionados quando fazem parte do contrato
+verificável do projeto.
 
 ## Licença
 
