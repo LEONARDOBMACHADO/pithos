@@ -17,9 +17,10 @@ e WinZip.
 
 ## Tamanho inicial recomendado
 
-Para a primeira rodada, mantenha o corpus entre **750 e 950 MiB** no total.
-A média pretendida dos arquivos primários é **20–30 MiB**, com diversidade
-intencional:
+Para a primeira rodada, mantenha o corpus entre **850 e 1050 MiB** no total.
+Os 29 alvos primários do downloader somam aproximadamente 845 MiB antes de
+ajustes para os fixtures realmente disponíveis. A média pretendida dos arquivos
+primários é **20–30 MiB**, com diversidade intencional:
 
 - pequenos: 1–10 MiB;
 - médios: 10–25 MiB;
@@ -104,7 +105,7 @@ O downloader:
 - baixa para a subpasta correta;
 - valida o SHA-256 publicado antes de publicar o arquivo local;
 - nunca substitui silenciosamente um arquivo local com hash divergente;
-- cria, por padrão, duas cópias byte-exact de quatro famílias como controles de
+- cria, por padrão, **uma cópia byte-exact de quatro famílias** como controles de
   dedup;
 - grava `source-register.csv` e `download-missing.txt` em `results/`.
 
@@ -138,17 +139,19 @@ da origem. Esse registro não entra no corpus e é copiado para a evidência.
 
 ## Controles de deduplicação
 
-O downloader cria em `duplicates/` **cópias byte a byte** de quatro famílias,
-quando existem fontes adequadas:
+O downloader cria em `duplicates/` **uma cópia byte a byte** de cada uma de
+quatro famílias, quando existem fontes adequadas:
 
 - TXT/CSV/JSON;
 - PDF;
 - PNG/JPEG;
 - ZIP/7z/RAR.
 
-Cada fonte selecionada recebe duas cópias com nomes diferentes. Não há alteração
-dos bytes. Essas cópias são controles positivos para a deduplicação exata e
-permitem medir quanto trabalho C3 consegue eliminar independentemente do codec.
+Cada fonte selecionada passa a existir duas vezes no corpus: o original e uma
+cópia com nome diferente. Não há alteração dos bytes. Isso já é suficiente como
+controle positivo para a deduplicação exata e permite medir quanto trabalho C3
+consegue eliminar independentemente do codec sem inflar desnecessariamente o
+primeiro corpus.
 
 Near-duplicates serão adicionados em uma matriz separada quando similarity,
 clustering e delta entrarem fisicamente no pipeline; não misturar essa avaliação
