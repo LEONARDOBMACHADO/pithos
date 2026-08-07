@@ -1,0 +1,12 @@
+[package]
+name = "pithos-native-codec-v8"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+pithos-core = { path = "../pithos-core" }
+pithos-native-v7 = { package = "pithos-native-codec-v7", path = "../pithos-native-codec-v7" }
+flate2.workspace = true
+zstd.workspace = true
