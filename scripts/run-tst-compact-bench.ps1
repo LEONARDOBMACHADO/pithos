@@ -22,24 +22,46 @@ if (-not (Test-Path -LiteralPath $corpusPath -PathType Container)) {
 $resultsPath = Join-Path $corpusPath 'results'
 New-Item -ItemType Directory -Force -Path $resultsPath | Out-Null
 
-# Make common Windows installations visible to child benchmark processes even
-# when installers did not add their CLI directory to PATH.
+# Intermediate development benchmarks intentionally compare only Pithos and
+# 7-Zip. WinRAR returns for the final release benchmark; excluding it here also
+# avoids GUI/ad dialogs on desktop WinRAR installations.
+$pathSeparator = [System.IO.Path]::PathSeparator
+$filteredPath = @($env:PATH -split [regex]::Escape([string]$pathSeparator) | Where-Object {
+    -not [string]::IsNullOrWhiteSpace($_) -and
+    $_ -notmatch '(?i)[\\/](WinRAR|WinZip)[\\/]?$'
+})
 $programFiles = [System.Environment]::GetFolderPath('ProgramFiles')
 $programFilesX86 = [System.Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
-$toolDirs = New-Object System.Collections.Generic.List[string]
+$sevenZipDirs = New-Object System.Collections.Generic.List[string]
 foreach ($base in @($programFiles, $programFilesX86)) {
     if ([string]::IsNullOrWhiteSpace($base)) {
         continue
     }
-    foreach ($leaf in @('7-Zip', 'WinRAR', 'WinZip')) {
-        $candidate = Join-Path $base $leaf
-        if ((Test-Path -LiteralPath $candidate -PathType Container) -and -not $toolDirs.Contains($candidate)) {
-            $toolDirs.Add($candidate)
-        }
+    $candidate = Join-Path $base '7-Zip'
+    if ((Test-Path -LiteralPath $candidate -PathType Container) -and -not $sevenZipDirs.Contains($candidate)) {
+        $sevenZipDirs.Add($candidate)
     }
 }
-if ($toolDirs.Count -gt 0) {
-    $env:PATH = (($toolDirs.ToArray() + @($env:PATH)) -join [System.IO.Path]::PathSeparator)
+$env:PATH = (($sevenZipDirs.ToArray() + $filteredPath) -join $pathSeparator)
+
+# Never allow generated archives/work trees from the previous branch to affect
+# the next measurement. Corpus source archives are outside results/work and are
+# deliberately preserved.
+$workPath = Join-Path $resultsPath 'work'
+if (Test-Path -LiteralPath $workPath) {
+    Remove-Item -LiteralPath $workPath -Recurse -Force
+}
+foreach ($stale in @(
+    'phase-analysis.jsonl',
+    'phase-analysis-summary.json',
+    'codec-benchmark.jsonl',
+    'codec-benchmark.csv',
+    'benchmark.jsonl',
+    'benchmark.csv',
+    'benchmark-summary.md',
+    'pithos-telemetry.jsonl'
+)) {
+    Remove-Item -LiteralPath (Join-Path $resultsPath $stale) -Force -ErrorAction SilentlyContinue
 }
 
 $timestamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
@@ -52,10 +74,11 @@ $toolLines = New-Object System.Collections.Generic.List[string]
 $toolLines.Add("timestamp_utc=$((Get-Date).ToUniversalTime().ToString('o'))")
 $toolLines.Add("repo=$repo")
 $toolLines.Add("corpus=$corpusPath")
+$toolLines.Add('comparison_scope=pithos-vs-7zip')
 $toolLines.Add("powershell=$($PSVersionTable.PSVersion)")
 $toolLines.Add("rustc=$(& rustc --version 2>&1)")
 $toolLines.Add("cargo=$(& cargo --version 2>&1)")
-foreach ($tool in @('7z', '7zz', 'WinRAR', 'wzzip', 'wzunzip')) {
+foreach ($tool in @('7z', '7zz')) {
     $command = Get-Command $tool -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($null -eq $command) {
         $toolLines.Add("$tool=NOT_FOUND")
@@ -63,6 +86,8 @@ foreach ($tool in @('7z', '7zz', 'WinRAR', 'wzzip', 'wzunzip')) {
         $toolLines.Add("$tool=$($command.Source)")
     }
 }
+$toolLines.Add('WinRAR=INTENTIONALLY_EXCLUDED_INTERMEDIATE_BENCHMARK')
+$toolLines.Add('WinZip=INTENTIONALLY_EXCLUDED_INTERMEDIATE_BENCHMARK')
 [System.IO.File]::WriteAllLines($toolsPath, $toolLines, $utf8)
 
 Write-Host "=== Corpus inventory ===" -ForegroundColor Cyan
@@ -88,7 +113,7 @@ if (-not $emptyCorpus) {
     & cargo run --release -p pithos-bench --bin pithos-codecbench -- --corpus $corpusPath --results $resultsPath
     $codecExit = $LASTEXITCODE
 
-    Write-Host "`n=== Comparative compression benchmark ===" -ForegroundColor Cyan
+    Write-Host "`n=== Comparative compression benchmark (Pithos vs 7-Zip) ===" -ForegroundColor Cyan
     & cargo run --release -p pithos-bench --bin pithos-bench -- --corpus $corpusPath --results $resultsPath
     $benchmarkExit = $LASTEXITCODE
 
@@ -132,6 +157,8 @@ $summaryLines = @(
     "timestamp_utc=$((Get-Date).ToUniversalTime().ToString('o'))",
     "commit=$(& git rev-parse HEAD)",
     "branch=$(& git branch --show-current)",
+    'comparison_scope=pithos-vs-7zip',
+    'generated_work_cleaned_before_run=True',
     "inventory_exit=$inventoryExit",
     "corpus_file_count=$corpusFileCount",
     "empty_corpus=$emptyCorpus",
