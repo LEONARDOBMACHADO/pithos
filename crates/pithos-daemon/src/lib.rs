@@ -695,7 +695,10 @@ mod tests {
         fs::write(source.join("file.txt"), b"0123456789").unwrap();
         let archive = temp.path().join("workflow.pithos");
         let mut config = DaemonConfig::for_test(temp.path().join("state"));
-        config.transfer_ttl = std::time::Duration::from_millis(25);
+        // A transfer must remain available long enough for a client that learns
+        // its path from the persisted terminal result. Tiny millisecond TTLs
+        // race with scheduler/CI load and test the clock rather than semantics.
+        config.transfer_ttl = std::time::Duration::from_secs(2);
         let service = DaemonService::open(config).unwrap();
         let token = open_session(&service, 30, temp.path()).await;
 
@@ -794,8 +797,16 @@ mod tests {
         let range_terminal = wait_for_job(&service, 30, &token, range_id).await;
         let transfer_path = range_terminal["result"]["result"]["path"].as_str().unwrap();
         assert_eq!(fs::read(transfer_path).unwrap(), b"2345");
-        tokio::time::sleep(std::time::Duration::from_millis(75)).await;
-        assert!(!std::path::Path::new(transfer_path).exists());
+        let cleanup_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::path::Path::new(transfer_path).exists()
+            && tokio::time::Instant::now() < cleanup_deadline
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        assert!(
+            !std::path::Path::new(transfer_path).exists(),
+            "expired transfer was not cleaned within the bounded test window"
+        );
 
         let extract_root = temp.path().join("extracted");
         let extracted = rpc(

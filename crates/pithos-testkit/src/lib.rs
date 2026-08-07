@@ -630,9 +630,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn gate_a_symlinks_and_non_utf8_paths_roundtrip_safely() {
-        use std::ffi::OsString;
-        use std::os::unix::ffi::OsStringExt;
+    fn gate_a_symlinks_roundtrip_safely() {
         use std::os::unix::fs::symlink;
         use std::path::PathBuf;
 
@@ -641,8 +639,6 @@ mod tests {
         fs::create_dir_all(&source).unwrap();
         write_bytes(&source.join("target"), b"target");
         symlink("target", source.join("link")).unwrap();
-        let raw_name = OsString::from_vec(vec![b'n', b'o', b'n', 0xff, b'u', b'8']);
-        write_bytes(&source.join(&raw_name), b"raw name");
         let archive = temp.path().join("paths.pithos");
         let restored = temp.path().join("restored");
         pack_directory(&source, &archive);
@@ -655,6 +651,31 @@ mod tests {
             fs::read_link(restored.join("link")).unwrap(),
             PathBuf::from("target")
         );
+    }
+
+    // Linux filesystems expose arbitrary byte names through OsString. macOS
+    // APIs/filesystems can reject ill-formed byte sequences with EILSEQ, so
+    // the lossless non-UTF8 contract is exercised where such a name can
+    // actually be created; symlink safety remains covered on every Unix.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn gate_a_non_utf8_unix_path_roundtrips_losslessly() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        fs::create_dir_all(&source).unwrap();
+        let raw_name = OsString::from_vec(vec![b'n', b'o', b'n', 0xff, b'u', b'8']);
+        write_bytes(&source.join(&raw_name), b"raw name");
+        let archive = temp.path().join("non-utf8-path.pithos");
+        let restored = temp.path().join("restored");
+        pack_directory(&source, &archive);
+        unpack(UnpackRequest {
+            archive,
+            output_dir: restored.clone(),
+        })
+        .unwrap();
         assert_eq!(read_bytes(&restored.join(raw_name)), b"raw name");
     }
 }
