@@ -113,14 +113,19 @@ pub fn run_suite(config: &BenchmarkConfig) -> Result<Vec<BenchmarkRecord>, Bench
 
     for case in &cases {
         for profile in &config.profiles {
-            let (record, run_telemetry) = run_pithos_case(case, *profile, &config.results_dir)?;
+            let (record, run_telemetry) =
+                run_pithos_case(case, *profile, &config.results_dir)?;
             write_jsonl(&mut jsonl, &record)?;
             write_jsonl(&mut telemetry, &run_telemetry)?;
             records.push(record);
         }
 
         if config.include_external {
-            for kind in [ExternalKind::SevenZip, ExternalKind::WinRar, ExternalKind::WinZip] {
+            for kind in [
+                ExternalKind::SevenZip,
+                ExternalKind::WinRar,
+                ExternalKind::WinZip,
+            ] {
                 if external_available(kind) {
                     let record = run_external_case(case, kind, &config.results_dir)?;
                     write_jsonl(&mut jsonl, &record)?;
@@ -142,7 +147,10 @@ fn run_pithos_case(
     results_dir: &Path,
 ) -> Result<(BenchmarkRecord, pithos_telemetry::RunTelemetry), BenchError> {
     let profile_name = profile_name(profile).to_owned();
-    let case_dir = results_dir.join("work").join(&case.name).join(format!("pithos-{profile_name}"));
+    let case_dir = results_dir
+        .join("work")
+        .join(&case.name)
+        .join(format!("pithos-{profile_name}"));
     reset_dir(&case_dir)?;
     let archive = case_dir.join(default_case_archive_name(&case.inputs));
     let unpack_dir = case_dir.join("unpacked");
@@ -151,7 +159,10 @@ fn run_pithos_case(
         format!("{}-pithos-{profile_name}", case.name),
         Operation::Benchmark,
         Some(profile_name.clone()),
-        case.inputs.iter().map(|path| path.to_string_lossy().into_owned()).collect(),
+        case.inputs
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect(),
         Some(archive.to_string_lossy().into_owned()),
     );
 
@@ -222,7 +233,9 @@ fn run_pithos_case(
             output_dir: unpack_dir,
         })
     } else {
-        Err(pithos_core::PithosError::InvalidMetadata("benchmark verify failed"))
+        Err(pithos_core::PithosError::InvalidMetadata(
+            "benchmark verify failed",
+        ))
     };
     let unpack_elapsed = unpack_started.elapsed();
     collector.record(
@@ -322,16 +335,29 @@ fn run_external_case(
     })
 }
 
-fn run_external_compress(kind: ExternalKind, archive: &Path, inputs: &[PathBuf]) -> Result<(), String> {
+fn run_external_compress(
+    kind: ExternalKind,
+    archive: &Path,
+    inputs: &[PathBuf],
+) -> Result<(), String> {
     let mut command = match kind {
         ExternalKind::SevenZip => {
             let mut cmd = Command::new(seven_zip_command());
-            cmd.arg("a").arg("-t7z").arg("-mx=9").arg("-m0=lzma2").arg(archive);
+            cmd.arg("a")
+                .arg("-t7z")
+                .arg("-mx=9")
+                .arg("-m0=lzma2")
+                .arg(archive);
             cmd
         }
         ExternalKind::WinRar => {
             let mut cmd = Command::new("WinRAR");
-            cmd.arg("a").arg("-ma5").arg("-m5").arg("-s").arg("-ep1").arg(archive);
+            cmd.arg("a")
+                .arg("-ma5")
+                .arg("-m5")
+                .arg("-s")
+                .arg("-ep1")
+                .arg(archive);
             cmd
         }
         ExternalKind::WinZip => {
@@ -344,11 +370,18 @@ fn run_external_compress(kind: ExternalKind, archive: &Path, inputs: &[PathBuf])
     run_status(command)
 }
 
-fn run_external_decompress(kind: ExternalKind, archive: &Path, output: &Path) -> Result<(), String> {
+fn run_external_decompress(
+    kind: ExternalKind,
+    archive: &Path,
+    output: &Path,
+) -> Result<(), String> {
     let mut command = match kind {
         ExternalKind::SevenZip => {
             let mut cmd = Command::new(seven_zip_command());
-            cmd.arg("x").arg("-y").arg(format!("-o{}", output.display())).arg(archive);
+            cmd.arg("x")
+                .arg("-y")
+                .arg(format!("-o{}", output.display()))
+                .arg(archive);
             cmd
         }
         ExternalKind::WinRar => {
@@ -366,13 +399,23 @@ fn run_external_decompress(kind: ExternalKind, archive: &Path, output: &Path) ->
 }
 
 fn run_status(mut command: Command) -> Result<(), String> {
-    let output = command.stdout(Stdio::piped()).stderr(Stdio::piped()).output().map_err(|e| e.to_string())?;
+    let output = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| error.to_string())?;
     if output.status.success() {
         return Ok(());
     }
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    let detail = if !stderr.is_empty() { stderr } else if !stdout.is_empty() { stdout } else { format!("exit status {}", output.status) };
+    let detail = if !stderr.is_empty() {
+        stderr
+    } else if !stdout.is_empty() {
+        stdout
+    } else {
+        format!("exit status {}", output.status)
+    };
     Err(detail)
 }
 
@@ -399,14 +442,19 @@ fn command_exists(name: &str) -> bool {
 
 fn collect_files(root: &Path, excluded_root: &Path) -> Result<Vec<PathBuf>, std::io::Error> {
     let root = fs::canonicalize(root)?;
-    let excluded = fs::canonicalize(excluded_root).unwrap_or_else(|_| excluded_root.to_path_buf());
+    let excluded =
+        fs::canonicalize(excluded_root).unwrap_or_else(|_| excluded_root.to_path_buf());
     let mut files = Vec::new();
     collect_files_recursive(&root, &excluded, &mut files)?;
     files.sort();
     Ok(files)
 }
 
-fn collect_files_recursive(current: &Path, excluded: &Path, files: &mut Vec<PathBuf>) -> Result<(), std::io::Error> {
+fn collect_files_recursive(
+    current: &Path,
+    excluded: &Path,
+    files: &mut Vec<PathBuf>,
+) -> Result<(), std::io::Error> {
     if current.starts_with(excluded) {
         return Ok(());
     }
@@ -449,7 +497,11 @@ fn reset_dir(path: &Path) -> Result<(), std::io::Error> {
 }
 
 fn ratio(original: u64, archive: u64) -> f64 {
-    if original == 0 { 1.0 } else { archive as f64 / original as f64 }
+    if original == 0 {
+        1.0
+    } else {
+        archive as f64 / original as f64
+    }
 }
 
 fn profile_name(profile: CompressionProfile) -> &'static str {
@@ -479,11 +531,15 @@ fn sanitize_name(value: &str) -> String {
             out.push('_');
         }
     }
-    if out.is_empty() { "file".to_owned() } else { out }
+    if out.is_empty() {
+        "file".to_owned()
+    } else {
+        out
+    }
 }
 
 fn csv_field(value: &str) -> String {
-    if value.contains([',', '"', '\n', '\r']) {
+    if value.contains(',') || value.contains('"') || value.contains('\n') || value.contains('\r') {
         format!("\"{}\"", value.replace('"', "\"\""))
     } else {
         value.to_owned()
@@ -492,7 +548,10 @@ fn csv_field(value: &str) -> String {
 
 fn write_csv(path: &Path, records: &[BenchmarkRecord]) -> Result<(), std::io::Error> {
     let mut writer = BufWriter::new(File::create(path)?);
-    writeln!(writer, "case,compressor,profile,input_count,original_bytes,archive_bytes,compression_ratio,savings_percent,compress_ms,verify_ms,decompress_ms,status,detail")?;
+    writeln!(
+        writer,
+        "case,compressor,profile,input_count,original_bytes,archive_bytes,compression_ratio,savings_percent,compress_ms,verify_ms,decompress_ms,status,detail"
+    )?;
     for record in records {
         writeln!(
             writer,
@@ -502,12 +561,30 @@ fn write_csv(path: &Path, records: &[BenchmarkRecord]) -> Result<(), std::io::Er
             csv_field(&record.profile),
             record.input_count,
             record.original_bytes,
-            record.archive_bytes.map(|value| value.to_string()).unwrap_or_default(),
-            record.compression_ratio.map(|value| format!("{value:.6}")).unwrap_or_default(),
-            record.savings_percent.map(|value| format!("{value:.4}")).unwrap_or_default(),
-            record.compress_ms.map(|value| value.to_string()).unwrap_or_default(),
-            record.verify_ms.map(|value| value.to_string()).unwrap_or_default(),
-            record.decompress_ms.map(|value| value.to_string()).unwrap_or_default(),
+            record
+                .archive_bytes
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            record
+                .compression_ratio
+                .map(|value| format!("{value:.6}"))
+                .unwrap_or_default(),
+            record
+                .savings_percent
+                .map(|value| format!("{value:.4}"))
+                .unwrap_or_default(),
+            record
+                .compress_ms
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            record
+                .verify_ms
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            record
+                .decompress_ms
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
             csv_field(&record.status),
             csv_field(record.detail.as_deref().unwrap_or("")),
         )?;
@@ -534,5 +611,13 @@ mod tests {
     #[test]
     fn sanitizer_is_stable() {
         assert_eq!(sanitize_name("a/b c.pdf"), "a_b_c.pdf");
+    }
+
+    #[test]
+    fn csv_fields_escape_delimiters_quotes_and_newlines() {
+        assert_eq!(csv_field("plain"), "plain");
+        assert_eq!(csv_field("a,b"), "\"a,b\"");
+        assert_eq!(csv_field("a\"b"), "\"a\"\"b\"");
+        assert_eq!(csv_field("a\nb"), "\"a\nb\"");
     }
 }
