@@ -78,7 +78,19 @@ jobs:
           rustup default stable
 
       - name: Build workspace
-        run: cargo build --workspace --all-targets
+        id: cross_build
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo build --workspace --all-targets 2>&1 | tee cross-platform-build.log
+
+      - name: Upload build diagnostics
+        if: failure() && steps.cross_build.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cross-platform-build-${{ matrix.os }}
+          path: cross-platform-build.log
+          if-no-files-found: error
 
       - name: Test workspace
         id: cross_tests
