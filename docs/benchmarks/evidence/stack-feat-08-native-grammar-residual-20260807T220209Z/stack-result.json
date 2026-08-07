@@ -1,0 +1,30 @@
+﻿[
+    {
+        "branch":  "feat/08-native-grammar-residual",
+        "commit":  "e7db671ca1b4ad60addb607c129b79baf1386036",
+        "compressor":  "pithos",
+        "profile":  "archive-max",
+        "original_bytes":  499318122,
+        "archive_bytes":  89024107,
+        "savings_percent":  82.170864,
+        "compress_ms":  572037.334,
+        "verify_ms":  887.863,
+        "decompress_ms":  1576.718,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    },
+    {
+        "branch":  "feat/08-native-grammar-residual",
+        "commit":  "e7db671ca1b4ad60addb607c129b79baf1386036",
+        "compressor":  "7zip",
+        "profile":  "lzma2-mx9-solid",
+        "original_bytes":  499318122,
+        "archive_bytes":  86352020,
+        "savings_percent":  82.706011,
+        "compress_ms":  61176.653,
+        "verify_ms":  3922.16,
+        "decompress_ms":  3909.547,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    }
+]
