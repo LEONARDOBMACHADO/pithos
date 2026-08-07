@@ -79,7 +79,7 @@ function Get-ApiItems {
 
 function Select-ClosestFixture {
     param(
-        [Parameter(Mandatory=$true)][object[]]$Items,
+        [Parameter(Mandatory=$true)][AllowEmptyCollection()][object[]]$Items,
         [Parameter(Mandatory=$true)][long]$TargetBytes,
         [Parameter(Mandatory=$true)][System.Collections.Generic.HashSet[string]]$AlreadyUsed
     )
@@ -95,7 +95,7 @@ foreach ($target in $targets) {
     $format = [string]$target.Format
     $targetBytes = [long]$target.MiB * 1MB
     if (-not $selectedByFormat.ContainsKey($format)) {
-        $selectedByFormat[$format] = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+        $selectedByFormat[$format] = New-Object -TypeName 'System.Collections.Generic.HashSet[string]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
     }
     $used = $selectedByFormat[$format]
     Write-Host "Selecting .$format near $($target.MiB) MiB..." -ForegroundColor Cyan
@@ -180,7 +180,7 @@ if (-not $SkipDuplicates) {
             $relative = $destination.Substring($corpusPath.Length).TrimStart([char[]]@([char]92, [char]47)).Replace([char]92, [char]47)
             $sourceRows.Add([pscustomobject]@{
                 relative_path = $relative
-                format = $source.Extension.TrimStart('.').ToLowerInvariant()
+                format = $source.Extension.TrimStart([char]'.').ToLowerInvariant()
                 target_mib = [math]::Round($source.Length / 1MB, 3)
                 actual_mib = [math]::Round($source.Length / 1MB, 3)
                 sha256 = $hash
