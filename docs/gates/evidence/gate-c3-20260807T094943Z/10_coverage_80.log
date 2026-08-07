@@ -1,0 +1,54 @@
+info: cargo-llvm-cov currently setting cfg(coverage); you can opt-out it by passing --no-cfg-coverage
+   Compiling pithos-core v0.1.0 (C:\Projetos\TESTE\crates\pithos-core)
+   Compiling pithos-codecs v0.1.0 (C:\Projetos\TESTE\crates\pithos-codecs)
+   Compiling pithos-planner v0.1.0 (C:\Projetos\TESTE\crates\pithos-planner)
+   Compiling pithos-io v0.1.0 (C:\Projetos\TESTE\crates\pithos-io)
+   Compiling pithos-format v0.1.0 (C:\Projetos\TESTE\crates\pithos-format)
+   Compiling pithos-agent-api v0.1.0 (C:\Projetos\TESTE\crates\pithos-agent-api)
+   Compiling pithos-analysis v0.1.0 (C:\Projetos\TESTE\crates\pithos-analysis)
+   Compiling pithos-mount v0.1.0 (C:\Projetos\TESTE\crates\pithos-mount)
+   Compiling pithos-viewer v0.1.0 (C:\Projetos\TESTE\crates\pithos-viewer)
+   Compiling pithos-transforms v0.1.0 (C:\Projetos\TESTE\crates\pithos-transforms)
+   Compiling pithos-engine v0.1.0 (C:\Projetos\TESTE\crates\pithos-engine)
+   Compiling pithos-recompress v0.1.0 (C:\Projetos\TESTE\crates\pithos-recompress)
+   Compiling pithos-daemon v0.1.0 (C:\Projetos\TESTE\crates\pithos-daemon)
+   Compiling pithos-cli v0.1.0 (C:\Projetos\TESTE\crates\pithos-cli)
+   Compiling pithos-testkit v0.1.0 (C:\Projetos\TESTE\crates\pithos-testkit)
+error[E0433]: cannot find `unix` in `os`
+   --> crates\pithos-testkit\src\lib.rs:664:22
+    |
+664 |         use std::os::unix::ffi::OsStringExt;
+    |                      ^^^^ could not find `unix` in `os`
+    |
+note: found an item that was configured out
+   --> /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library\std\src\os\mod.rs:29:4
+    |
+    = note: the item is gated here
+note: found an item that was configured out
+   --> /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library\std\src\os\mod.rs:84:40
+    |
+    = note: the item is gated here
+System.Management.Automation.RemoteException
+error[E0599]: no function or associated item named `from_vec` found for struct `OsString` in the current scope
+   --> crates\pithos-testkit\src\lib.rs:669:34
+    |
+669 |         let raw_name = OsString::from_vec(vec![b'n', b'o', b'n', 0xff, b'u', b'8']);
+    |                                  ^^^^^^^^ function or associated item not found in `OsString`
+    |
+note: if you're trying to build a new `OsString` consider using one of the following associated functions:
+      OsString::new
+      OsString::from_encoded_bytes_unchecked
+      OsString::with_capacity
+   --> /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library\std\src\ffi\os_str.rs:141:4
+help: there is an associated function `from` with a similar name
+    |
+669 -         let raw_name = OsString::from_vec(vec![b'n', b'o', b'n', 0xff, b'u', b'8']);
+669 +         let raw_name = OsString::from(vec![b'n', b'o', b'n', 0xff, b'u', b'8']);
+    |
+System.Management.Automation.RemoteException
+Some errors have detailed explanations: E0433, E0599.
+For more information about an error, try `rustc --explain E0433`.
+error: process didn't exit successfully: `C:\Users\leona\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin\rustc.exe --crate-name pithos_testkit --edition=2024 crates\pithos-testkit\src\lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --emit=dep-info,link -C embed-bitcode=no -C debuginfo=2 --test --check-cfg cfg(docsrs,test) --check-cfg "cfg(feature, values())" -C metadata=ea8fd9ce3070ea5d -C extra-filename=-330469768146dfc3 --out-dir C:\Projetos\TESTE\target\llvm-cov-target\debug\deps -C incremental=C:\Projetos\TESTE\target\llvm-cov-target\debug\incremental -L dependency=C:\Projetos\TESTE\target\llvm-cov-target\debug\deps --extern blake3=C:\Projetos\TESTE\target\llvm-cov-target\debug\deps\libblake3-361ee7e003f933ff.rlib --extern crc32c=C:\Projetos\TESTE\target\llvm-cov-target\debug\deps\libcrc32c-71cb2a4d7276cae6.rlib --extern pithos_core=C:\Projetos\TESTE\target\llvm-cov-target\debug\deps\libpithos_core-6041ce5eedaca616.rlib --extern pithos_engine=C:\Projetos\TESTE\target\llvm-cov-target\debug\deps\libpithos_engine-140f02281773f519.rlib --extern pithos_format=C:\Projetos\TESTE\target\llvm-cov-target\debug\deps\libpithos_format-6f674f21c41f8480.rlib --extern proptest=C:\Projetos\TESTE\target\llvm-cov-target\debug\deps\libproptest-a81a3842d6cd35e9.rlib --extern same_file=C:\Projetos\TESTE\target\llvm-cov-target\debug\deps\libsame_file-0d2924fe32db87e3.rlib --extern tempfile=C:\Projetos\TESTE\target\llvm-cov-target\debug\deps\libtempfile-5b17420d5d00234d.rlib -L native=C:\Projetos\TESTE\target\llvm-cov-target\debug\build\blake3-e078fe15e55919b9\out -L native=C:\Projetos\TESTE\target\llvm-cov-target\debug\build\blake3-e078fe15e55919b9\out -L native=C:\Projetos\TESTE\target\llvm-cov-target\debug\build\liblzma-sys-c0b08290c1503250\out -L native=C:\Projetos\TESTE\target\llvm-cov-target\debug\build\zstd-sys-2e19a96a2ff748bc\out -C instrument-coverage --cfg=coverage` (exit code: 1)
+error: could not compile `pithos-testkit` (lib test) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: process didn't exit successfully: `C:\Users\leona\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin\cargo.exe test --manifest-path C:\Projetos\TESTE\Cargo.toml --target-dir C:\Projetos\TESTE\target\llvm-cov-target --workspace --all-targets` (exit code: 101)

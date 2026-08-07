@@ -1,0 +1,5 @@
+name=03_exact_dedup_test
+command=cargo test -p pithos-analysis --test exact_dedup -- --nocapture
+started_utc=2026-08-07T09:50:14.1082494Z
+ended_utc=2026-08-07T09:50:21.3449765Z
+exit_code=0

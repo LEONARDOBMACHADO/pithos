@@ -1,0 +1,5 @@
+name=04_analysis_tests
+command=cargo test -p pithos-analysis --tests -- --nocapture
+started_utc=2026-08-07T09:50:21.3606922Z
+ended_utc=2026-08-07T09:50:28.6975635Z
+exit_code=0

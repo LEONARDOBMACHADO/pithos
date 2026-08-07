@@ -1,0 +1,9 @@
+   Compiling pithos-analysis v0.1.0 (C:\Projetos\TESTE\crates\pithos-analysis)
+   Compiling pithos-fuzz v0.0.0 (C:\Projetos\TESTE\fuzz)
+    Finished `release` profile [optimized + debuginfo] target(s) in 15.43s
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.38s
+     Running `fuzz\target\x86_64-pc-windows-msvc\release\exact_dedup.exe -artifact_prefix=C:\Projetos\TESTE\fuzz\artifacts\exact_dedup\ -runs=10000 -max_len=65536 C:\Projetos\TESTE\fuzz\corpus\exact_dedup`
+error: process didn't exit successfully: `fuzz\target\x86_64-pc-windows-msvc\release\exact_dedup.exe -artifact_prefix=C:\Projetos\TESTE\fuzz\artifacts\exact_dedup\ -runs=10000 -max_len=65536 C:\Projetos\TESTE\fuzz\corpus\exact_dedup` (exit code: 0xc0000135, STATUS_DLL_NOT_FOUND)
+────────────────────────────────────────────────────────────────────────────────
+System.Management.Automation.RemoteException
+Error: Fuzz target exited with exit code: 0xc0000135

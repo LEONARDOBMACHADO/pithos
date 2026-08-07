@@ -1,0 +1,5 @@
+name=06_clippy_analysis
+command=cargo clippy -p pithos-analysis --all-targets -- -D warnings
+started_utc=2026-08-07T09:50:40.6133195Z
+ended_utc=2026-08-07T09:50:45.8583603Z
+exit_code=0

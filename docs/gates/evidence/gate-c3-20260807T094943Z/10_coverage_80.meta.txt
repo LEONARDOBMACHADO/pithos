@@ -1,0 +1,5 @@
+name=10_coverage_80
+command=cargo llvm-cov --workspace --all-targets --fail-under-lines 80
+started_utc=2026-08-07T09:51:54.8739181Z
+ended_utc=2026-08-07T09:52:48.1257335Z
+exit_code=101

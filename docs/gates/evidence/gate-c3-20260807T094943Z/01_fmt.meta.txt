@@ -1,0 +1,5 @@
+name=01_fmt
+command=cargo fmt --all -- --check
+started_utc=2026-08-07T09:49:44.3552789Z
+ended_utc=2026-08-07T09:49:47.9135848Z
+exit_code=0

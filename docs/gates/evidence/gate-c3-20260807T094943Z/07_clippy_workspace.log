@@ -1,0 +1,39 @@
+    Checking pithos-analysis v0.1.0 (C:\Projetos\TESTE\crates\pithos-analysis)
+    Checking pithos-daemon v0.1.0 (C:\Projetos\TESTE\crates\pithos-daemon)
+    Checking pithos-testkit v0.1.0 (C:\Projetos\TESTE\crates\pithos-testkit)
+error[E0433]: cannot find `unix` in `os`
+   --> crates\pithos-testkit\src\lib.rs:664:22
+    |
+664 |         use std::os::unix::ffi::OsStringExt;
+    |                      ^^^^ could not find `unix` in `os`
+    |
+note: found an item that was configured out
+   --> /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library\std\src\os\mod.rs:29:4
+    |
+    = note: the item is gated here
+note: found an item that was configured out
+   --> /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library\std\src\os\mod.rs:84:40
+    |
+    = note: the item is gated here
+System.Management.Automation.RemoteException
+error[E0599]: no function or associated item named `from_vec` found for struct `std::ffi::OsString` in the current scope
+   --> crates\pithos-testkit\src\lib.rs:669:34
+    |
+669 |         let raw_name = OsString::from_vec(vec![b'n', b'o', b'n', 0xff, b'u', b'8']);
+    |                                  ^^^^^^^^ function or associated item not found in `std::ffi::OsString`
+    |
+note: if you're trying to build a new `std::ffi::OsString` consider using one of the following associated functions:
+      std::ffi::OsString::new
+      std::ffi::OsString::from_encoded_bytes_unchecked
+      std::ffi::OsString::with_capacity
+   --> /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library\std\src\ffi\os_str.rs:141:4
+help: there is an associated function `from` with a similar name
+    |
+669 -         let raw_name = OsString::from_vec(vec![b'n', b'o', b'n', 0xff, b'u', b'8']);
+669 +         let raw_name = OsString::from(vec![b'n', b'o', b'n', 0xff, b'u', b'8']);
+    |
+System.Management.Automation.RemoteException
+Some errors have detailed explanations: E0433, E0599.
+For more information about an error, try `rustc --explain E0433`.
+error: could not compile `pithos-testkit` (lib test) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

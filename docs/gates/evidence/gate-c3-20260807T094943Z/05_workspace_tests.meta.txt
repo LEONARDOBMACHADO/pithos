@@ -1,0 +1,5 @@
+name=05_workspace_tests
+command=cargo test --workspace --all-targets -- --nocapture
+started_utc=2026-08-07T09:50:28.7976544Z
+ended_utc=2026-08-07T09:50:40.5839084Z
+exit_code=101

@@ -1,0 +1,5 @@
+name=07_clippy_workspace
+command=cargo clippy --workspace --all-targets -- -D warnings
+started_utc=2026-08-07T09:50:45.8590712Z
+ended_utc=2026-08-07T09:50:55.1448902Z
+exit_code=101
