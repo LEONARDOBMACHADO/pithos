@@ -47,7 +47,7 @@ tst_compact/
   results/       # gerado; não entra no corpus nem no Git
 ```
 
-Não coloque outputs `.pts`, `.zip`, `.rar` ou `.7z` gerados pelos benchmarks nas
+Não coloque outputs `.phs`, `.zip`, `.rar` ou `.7z` gerados pelos benchmarks nas
 pastas de entrada. O runner usa `results/` para todos os artefatos temporários.
 
 ## Matriz inicial de formatos
@@ -202,11 +202,12 @@ Ele executa, em sequência:
 
 1. inventário e SHA-256 do corpus;
 2. `pithos-phasebench` para Scan → FastCDC → Fingerprints → Exact Dedup;
-3. benchmark de compactação/descompactação Pithos por arquivo e combinado;
-4. 7-Zip, WinRAR e WinZip quando encontrados;
-5. `benchmark-summary.md` com ranking combinado, vitórias individuais e
-   distribuição percentual do tempo da análise de Fase 3;
-6. cópia somente dos relatórios pequenos para uma pasta versionável em
+3. `pithos-codecbench` para STORE/Zstd/Brotli/LZMA2, incluindo decode byte-exato;
+4. benchmark de compactação/descompactação Pithos por arquivo e combinado;
+5. 7-Zip, WinRAR e WinZip quando encontrados;
+6. `benchmark-summary.md` com ranking combinado, vitórias individuais, custos dos
+   codecs e distribuição percentual do tempo da análise de Fase 3;
+7. cópia somente dos relatórios pequenos para uma pasta versionável em
    `docs/benchmarks/evidence/tst-compact-<timestamp>/`.
 
 Os grandes arquivos compactados/descompactados ficam somente em
@@ -224,6 +225,9 @@ O baseline já produz:
 - resultado por arquivo e `combined-all`;
 - ranking humano do corpus combinado;
 - número de vitórias por tamanho nos arquivos individuais;
+- resultado STORE/Zstd/Brotli/LZMA2 por arquivo;
+- savings %, encode/decode, throughput e memory bound de cada codec;
+- round-trip byte-exato de cada codec testado;
 - tempo e percentual de scan, chunking, fingerprinting e exact dedup;
 - chunks canônicos/referenciados;
 - duplicate bytes brutos;
@@ -232,17 +236,18 @@ O baseline já produz:
 
 A economia de exact dedup nesta etapa é explicitamente **potencial**: C3 ainda é
 format-neutral. Depois da integração física da `ChunkTable`, o mesmo corpus será
-rodado novamente e o ganho deverá aparecer também no tamanho real do `.pts`.
+rodado novamente e o ganho deverá aparecer também no tamanho real do `.phs`.
 
-## Regra de naming `.pts`
+## Regra de naming `.phs`
 
-Novos arquivos Pithos usam `.pts`:
+Novos arquivos Pithos usam `.phs`:
 
 ```text
-report.pdf      -> report.pdf.pts
-Project/        -> Project.pts
-A.txt + B.bin   -> files.pts
+report.pdf      -> report.pdf.phs
+Project/        -> Project.phs
+A.txt + B.bin   -> files.phs
 ```
 
-`--output/-o` continua permitindo nome explícito. Arquivos legados `.pithos`
-continuam sendo aceitos pelo leitor durante a transição.
+`--output/-o` continua permitindo nome explícito. `.pithos` permanece legado e
+`.pts`, usado provisoriamente durante desenvolvimento, continua legível mas não é
+a extensão pública a ser associada ao Pithos.
