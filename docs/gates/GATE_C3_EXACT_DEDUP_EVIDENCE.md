@@ -1,83 +1,18 @@
 # Gate C3 — Exact Dedup Evidence
 
 Status: implementation complete in `feat/phase3-exact-dedup`; final validation
-must now be executed **locally**. Automatic GitHub Actions validation is disabled.
+must be executed **locally**. Automatic GitHub Actions validation is disabled.
 
-The local validation runners create a timestamped directory under
-`docs/gates/evidence/` containing environment information, every command output,
-exit codes and a generated `SUMMARY.md`. Failing logs must be preserved exactly
-as generated.
+The local validation runners create timestamped directories under
+`docs/gates/evidence/` containing environment information, command output, exit
+codes and a generated `SUMMARY.md`. Failing logs must be preserved exactly as
+generated.
 
-## What the developer must run
-
-First update the local checkout and switch to the implementation branch:
-
-```text
-git fetch origin
-git switch feat/phase3-exact-dedup
-git pull --ff-only origin feat/phase3-exact-dedup
-git status --short
-git rev-parse HEAD
-```
-
-The working tree should be clean before validation.
-
-### Windows / PowerShell
+## Full Windows validation
 
 The Windows implementation lives in `scripts/validate-gate-c3-windows.ps1`.
-`scripts/validate-gate-c3.ps1` is only a compatibility wrapper.
-
-The current Windows runner is `gate-c3-windows-v4` and is intentionally written
-for Windows PowerShell 5.1 compatibility.
-
-From the repository root, first execute the fast runner self-test:
-
-```text
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate-gate-c3-windows.ps1 -SelfTest
-```
-
-It must print `SELF_TEST_OK`. The v4 self-test exercises the same serialization
-paths used by the full run for `environment.txt`, command metadata and
-`SUMMARY.md`, in addition to UTF-8 writing and native-process capture. This is
-intended to catch runner/infrastructure faults before starting the expensive Rust
-validation.
-
-Only after `SELF_TEST_OK`, run the complete Gate C3 validation:
-
-```text
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate-gate-c3-windows.ps1
-```
-
-PowerShell 5.1 or newer is sufficient. PowerShell 7 is not required.
-
-The full runner executes its self-test again before creating the validation run.
-It writes `BOOTSTRAP.txt` immediately after creating the evidence directory. If
-an unexpected runner exception still occurs later, it also writes
-`RUNNER_FATAL.txt` with the exception type, message and PowerShell script stack
-trace before exiting with code 2. Therefore a runner failure must still leave
-versionable diagnostics.
-
-The Windows runner performs the 10,000-run libFuzzer campaign with
-`--sanitizer none`. This keeps Gate C3 focused on deterministic functional fuzzing
-without requiring the Visual Studio C++ AddressSanitizer runtime to be installed
-or added to `PATH`. MSVC AddressSanitizer remains a separate hardening validation
-and is not silently reported as having run.
-
-### Linux / macOS / bash
-
-From the repository root:
-
-```text
-chmod +x ./scripts/validate-gate-c3.sh
-./scripts/validate-gate-c3.sh
-```
-
-Run **one** runner appropriate for the machine. Do not manually repeat individual
-commands unless the runner itself cannot start.
-
-## Commands executed by the Windows runner
-
-The Windows runner records all of the following:
+`scripts/validate-gate-c3.ps1` is only a compatibility wrapper. The full runner is
+written for Windows PowerShell 5.1 compatibility and executes:
 
 ```text
 cargo fmt --all -- --check
@@ -93,77 +28,86 @@ cargo +nightly fuzz run --sanitizer none exact_dedup -- -runs=10000 -max_len=655
 cargo llvm-cov --workspace --all-targets --all-features --fail-under-lines 80
 ```
 
-The evidence directory also records:
+The completed Windows run at commit
+`384c2ca9e1e57fde6bff58b2d75f26674a717585` produced ten successful checks. The
+only failed check was the 10,000-run cargo-fuzz campaign: with MSVC,
+`--sanitizer none` left SanitizerCoverage symbols unresolved at link time. This
+is a fuzzing-toolchain limitation, not a Pithos test failure. Build, all tests,
+doc-tests, Clippy, fuzz-target build and coverage completed successfully.
+
+The evidence commit `47f6e9a1121a3195b9234171295f662b33c0ba3c` adds only the
+full-run evidence directory; it does not change Rust source. Therefore those ten
+successful results remain evidence for the same Rust implementation.
+
+## Supplemental Windows ASan fuzz validation
+
+Windows cargo-fuzz requires the MSVC C++ AddressSanitizer runtime. The
+supplemental runner `scripts/validate-gate-c3-fuzz-windows.ps1` uses the default
+AddressSanitizer configuration and automatically searches the installed Visual
+Studio toolsets for `clang_rt.asan_dynamic-x86_64.dll`. When found, its directory
+is prepended to the runner process `PATH` before cargo-fuzz starts.
+
+Run from the repository root:
 
 ```text
-runner version
-branch
-commit SHA
-OS / architecture
-PowerShell version and edition
-rustc --version --verbose
-cargo --version
-cargo-fuzz --version
-cargo-llvm-cov --version
-rustup toolchain list
+git fetch origin
+git switch feat/phase3-exact-dedup
+git pull --ff-only origin feat/phase3-exact-dedup
 git status --short
-start/end timestamps
-exit code for every command
-fuzz sanitizer mode
+git rev-parse HEAD
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; [void][scriptblock]::Create([System.IO.File]::ReadAllText('.\scripts\validate-gate-c3-fuzz-windows.ps1')); Write-Host 'PARSE_OK'"
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate-gate-c3-fuzz-windows.ps1
 ```
 
-Each command gets a `.log` file even when it produces no output. Native stdout
-and stderr are captured directly through `System.Diagnostics.Process`, avoiding
-PowerShell error-record conversion in the evidence.
-
-## If a required local tool is missing
-
-Do not edit code merely to make the runner continue. Record the failure first.
-For missing validation tooling, install only the missing tool and rerun the whole
-runner so the committed evidence comes from one complete pass:
+The supplemental runner executes:
 
 ```text
-rustup toolchain install nightly
-cargo install cargo-fuzz --locked
-cargo install cargo-llvm-cov --locked
+cargo +nightly fuzz run exact_dedup -- -runs=10000 -max_len=65536
 ```
 
-`rustfmt` and `clippy` should be available through the repository Rust toolchain.
-If they are missing:
+This is a stronger Windows fuzz validation than the previous `--sanitizer none`
+attempt because AddressSanitizer remains enabled.
+
+If the runner cannot find the MSVC ASan runtime, it records exit code `125` and
+the exact marker `ASAN_RUNTIME_NOT_FOUND`. Install the Visual Studio component:
 
 ```text
-rustup component add rustfmt clippy
+Microsoft.VisualStudio.Component.VC.ASAN
 ```
 
-## What must be committed after the run
+and rerun the supplemental runner. Do not edit Pithos code merely to bypass the
+missing runtime.
 
-The runner creates a directory similar to:
+## Linux / macOS
+
+From the repository root:
 
 ```text
-docs/gates/evidence/gate-c3-20260807T120000Z/
+chmod +x ./scripts/validate-gate-c3.sh
+./scripts/validate-gate-c3.sh
 ```
 
-Commit the **entire generated directory**, including logs from failed commands.
-Do not delete errors, warnings, panic output, `BOOTSTRAP.txt`, `RUNNER_FATAL.txt`
-or environment metadata.
+## Evidence policy
+
+Commit the **entire generated evidence directory**, including logs from failed
+commands. Do not delete errors, warnings, panic output, `BOOTSTRAP.txt`,
+`RUNNER_FATAL.txt` or environment metadata.
 
 ```text
 git status --short
 git add docs/gates/evidence/
 git commit -m "test: record local Gate C3 validation evidence"
 git push origin feat/phase3-exact-dedup
+git rev-parse HEAD
 ```
 
 Do not add unrelated local files such as `docs/gates/GATE_A_EVIDENCE.md` or
-`docs/gates/GATE_B_EVIDENCE.md` to the evidence commit.
-
-If `git add` reports that a generated evidence file is ignored, stop and record
-that exact message instead of using `git add -f`; the branch is configured so
-Gate evidence should be trackable normally.
+`docs/gates/GATE_B_EVIDENCE.md` to an evidence commit.
 
 ## Gate C3 acceptance
 
-The next review closes Gate C3 only when the committed evidence demonstrates:
+Gate C3 closes when the committed evidence demonstrates:
 
 - every beneficial exact duplicate in the versioned corpus is detected;
 - different bytes are never deduplicated;
@@ -176,6 +120,8 @@ The next review closes Gate C3 only when the committed evidence demonstrates:
 - exact-dedup fuzz completes 10,000 runs without crash or panic;
 - line coverage remains at least 80%.
 
-If any command fails, the Gate remains open. The committed failure evidence is
-the input for the next correction cycle; the developer should not make unrelated
-implementation changes before that evidence is reviewed.
+For the current Windows validation cycle, the ten successful results in
+`gate-c3-20260807T135731Z` may be combined with a successful supplemental ASan
+fuzz result because no Rust source changed between the validated implementation
+and the evidence-only commit. If the supplemental fuzz passes, no repetition of
+the other ten checks is required to close Gate C3.
