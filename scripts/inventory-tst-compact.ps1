@@ -23,30 +23,49 @@ $resultsPath = Join-Path $corpusPath 'results'
 New-Item -ItemType Directory -Force -Path $resultsPath | Out-Null
 $manifestPath = Join-Path $resultsPath 'corpus-manifest.csv'
 $summaryPath = Join-Path $resultsPath 'corpus-summary.txt'
+$utf8 = New-Object System.Text.UTF8Encoding -ArgumentList $false
 
-$files = Get-ChildItem -LiteralPath $corpusPath -File -Recurse |
+$files = @(Get-ChildItem -LiteralPath $corpusPath -File -Recurse |
     Where-Object { -not $_.FullName.StartsWith($resultsPath, [System.StringComparison]::OrdinalIgnoreCase) } |
-    Sort-Object FullName
+    Sort-Object FullName)
 
-$rows = foreach ($file in $files) {
-    $relative = $file.FullName.Substring($corpusPath.Length).TrimStart([char[]]@([char]92, [char]47))
-    $hash = Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256
-    [pscustomobject]@{
-        relative_path = $relative.Replace([char]92, [char]47)
-        extension = $file.Extension.ToLowerInvariant()
-        bytes = [int64]$file.Length
-        mib = [math]::Round($file.Length / 1MB, 3)
-        sha256 = $hash.Hash.ToLowerInvariant()
-        modified_utc = $file.LastWriteTimeUtc.ToString('o')
+$rows = @(
+    foreach ($file in $files) {
+        $relative = $file.FullName.Substring($corpusPath.Length).TrimStart([char[]]@([char]92, [char]47))
+        $hash = Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256
+        [pscustomobject]@{
+            relative_path = $relative.Replace([char]92, [char]47)
+            extension = $file.Extension.ToLowerInvariant()
+            bytes = [int64]$file.Length
+            mib = [math]::Round($file.Length / 1MB, 3)
+            sha256 = $hash.Hash.ToLowerInvariant()
+            modified_utc = $file.LastWriteTimeUtc.ToString('o')
+        }
     }
+)
+
+if ($rows.Count -gt 0) {
+    $rows | Export-Csv -LiteralPath $manifestPath -NoTypeInformation -Encoding UTF8
+} else {
+    [System.IO.File]::WriteAllText(
+        $manifestPath,
+        '"relative_path","extension","bytes","mib","sha256","modified_utc"' + [Environment]::NewLine,
+        $utf8
+    )
 }
 
-$rows | Export-Csv -LiteralPath $manifestPath -NoTypeInformation -Encoding UTF8
-
-$totalBytes = [int64](($rows | Measure-Object -Property bytes -Sum).Sum)
-$count = @($rows).Count
+$count = $rows.Count
+$totalBytes = if ($count -gt 0) {
+    [int64](($rows | Measure-Object -Property bytes -Sum).Sum)
+} else {
+    [int64]0
+}
 $averageBytes = if ($count -gt 0) { [double]$totalBytes / $count } else { 0 }
-$extensions = @($rows | Group-Object extension | Sort-Object Name)
+$extensions = if ($count -gt 0) {
+    @($rows | Group-Object extension | Sort-Object Name)
+} else {
+    @()
+}
 
 $summary = New-Object System.Collections.Generic.List[string]
 $summary.Add("corpus=$corpusPath")
@@ -62,7 +81,7 @@ foreach ($group in $extensions) {
     $summary.Add("$($group.Name),count=$($group.Count),mib=$([math]::Round($extensionBytes / 1MB, 3))")
 }
 
-[System.IO.File]::WriteAllLines($summaryPath, $summary, (New-Object System.Text.UTF8Encoding -ArgumentList $false))
+[System.IO.File]::WriteAllLines($summaryPath, $summary, $utf8)
 
 Write-Host "Corpus inventory complete" -ForegroundColor Green
 Write-Host "Files: $count"
