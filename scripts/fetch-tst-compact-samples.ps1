@@ -16,8 +16,11 @@ New-Item -ItemType Directory -Force -Path $corpusPath | Out-Null
 $resultsPath = Join-Path $corpusPath 'results'
 New-Item -ItemType Directory -Force -Path $resultsPath | Out-Null
 
-# The generic SampleFile API returns name, size_bytes, sha256 and download_url.
-# Multiple targets for one format intentionally select different fixtures.
+# SampleFile.com documents /samples/api/files?format=<ext> as returning
+# fixture metadata with name, size_bytes, sha256 and download_url. The response
+# wrapper has changed over time, so this runner accepts direct arrays and common
+# wrapper properties instead of binding the raw response directly to a mandatory
+# collection parameter.
 $targets = @(
     @{ Format='txt';   Folder='text';       MiB=10 },
     @{ Format='csv';   Folder='structured'; MiB=25 },
@@ -59,33 +62,77 @@ $selectedByFormat = @{}
 $sourceRows = New-Object System.Collections.Generic.List[object]
 $missingRows = New-Object System.Collections.Generic.List[string]
 
-function Get-ApiItems {
-    param([Parameter(Mandatory=$true)][string]$Format)
-    $uri = "https://samplefile.com/samples/api/files?format=$Format"
-    try {
-        $response = Invoke-RestMethod -Uri $uri -Method Get -UseBasicParsing
+function Test-FixtureShape {
+    param([AllowNull()][object]$Value)
+    if ($null -eq $Value) { return $false }
+    return ($null -ne $Value.PSObject.Properties['name']) -and
+        ($null -ne $Value.PSObject.Properties['size_bytes']) -and
+        ($null -ne $Value.PSObject.Properties['sha256']) -and
+        ($null -ne $Value.PSObject.Properties['download_url'])
+}
+
+function Expand-FixtureResponse {
+    param([AllowNull()][object]$Response)
+
+    if ($null -eq $Response) { return @() }
+    if ($Response -is [System.Array]) {
+        return @($Response | Where-Object { Test-FixtureShape $_ })
     }
-    catch {
-        Write-Warning "API failed for .$Format : $($_.Exception.Message)"
-        return @()
+    if (Test-FixtureShape $Response) {
+        return @($Response)
     }
 
-    if ($response -is [System.Array]) { return @($response) }
-    if ($null -ne $response.PSObject.Properties['files']) { return @($response.files) }
-    if ($null -ne $response.PSObject.Properties['results']) { return @($response.results) }
-    if ($null -ne $response.PSObject.Properties['data']) { return @($response.data) }
-    return @($response)
+    foreach ($propertyName in @('files', 'results', 'items', 'fixtures', 'data')) {
+        $property = $Response.PSObject.Properties[$propertyName]
+        if ($null -ne $property) {
+            $expanded = @(Expand-FixtureResponse -Response $property.Value)
+            if ($expanded.Count -gt 0) {
+                return $expanded
+            }
+        }
+    }
+    return @()
+}
+
+function Get-ApiItems {
+    param([Parameter(Mandatory=$true)][string]$Format)
+
+    $filesUri = "https://samplefile.com/samples/api/files?format=$Format"
+    try {
+        $response = Invoke-RestMethod -Uri $filesUri -Method Get -UseBasicParsing
+        $items = @(Expand-FixtureResponse -Response $response)
+        if ($items.Count -gt 0) {
+            return $items
+        }
+        Write-Warning "API returned no fixture list for .$Format; trying random fallback"
+    }
+    catch {
+        Write-Warning "Files API failed for .$Format : $($_.Exception.Message); trying random fallback"
+    }
+
+    $randomUri = "https://samplefile.com/samples/api/random?format=$Format"
+    try {
+        $randomResponse = Invoke-RestMethod -Uri $randomUri -Method Get -UseBasicParsing
+        return @(Expand-FixtureResponse -Response $randomResponse)
+    }
+    catch {
+        Write-Warning "Random API failed for .$Format : $($_.Exception.Message)"
+        return @()
+    }
 }
 
 function Select-ClosestFixture {
     param(
-        [Parameter(Mandatory=$true)][AllowEmptyCollection()][object[]]$Items,
+        [AllowNull()][AllowEmptyCollection()][object[]]$Items = @(),
         [Parameter(Mandatory=$true)][long]$TargetBytes,
         [Parameter(Mandatory=$true)][System.Collections.Generic.HashSet[string]]$AlreadyUsed
     )
-    $eligible = @($Items | Where-Object {
-        $null -ne $_.name -and $null -ne $_.size_bytes -and $null -ne $_.sha256 -and
-        $null -ne $_.download_url -and -not $AlreadyUsed.Contains([string]$_.name)
+
+    $normalizedItems = @($Items | Where-Object { $null -ne $_ })
+    if ($normalizedItems.Count -eq 0) { return $null }
+
+    $eligible = @($normalizedItems | Where-Object {
+        (Test-FixtureShape $_) -and -not $AlreadyUsed.Contains([string]$_.name)
     })
     if ($eligible.Count -eq 0) { return $null }
     return @($eligible | Sort-Object { [math]::Abs(([double]$_.size_bytes) - $TargetBytes) })[0]
@@ -111,6 +158,10 @@ foreach ($target in $targets) {
     $folderPath = Join-Path $corpusPath ([string]$target.Folder)
     $destination = Join-Path $folderPath ([string]$fixture.name)
     $expectedHash = ([string]$fixture.sha256).ToLowerInvariant()
+    $downloadUrl = [string]$fixture.download_url
+    if ($downloadUrl.StartsWith('/')) {
+        $downloadUrl = "https://samplefile.com$downloadUrl"
+    }
 
     $downloadRequired = $true
     if (Test-Path -LiteralPath $destination -PathType Leaf) {
@@ -128,7 +179,7 @@ foreach ($target in $targets) {
         $partial = "$destination.partial"
         Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
         try {
-            Invoke-WebRequest -Uri ([string]$fixture.download_url) -OutFile $partial -UseBasicParsing
+            Invoke-WebRequest -Uri $downloadUrl -OutFile $partial -UseBasicParsing
             $actualHash = (Get-FileHash -LiteralPath $partial -Algorithm SHA256).Hash.ToLowerInvariant()
             if ($actualHash -ne $expectedHash) {
                 throw "SHA-256 mismatch for $([string]$fixture.name): expected $expectedHash got $actualHash"
@@ -148,7 +199,7 @@ foreach ($target in $targets) {
         target_mib = [int]$target.MiB
         actual_mib = [math]::Round($actualBytes / 1MB, 3)
         sha256 = $expectedHash
-        source_url = [string]$fixture.download_url
+        source_url = $downloadUrl
         source_description = 'SampleFile.com verified fixture'
     })
 }
@@ -190,7 +241,16 @@ if (-not $SkipDuplicates) {
 }
 
 $sourceRegister = Join-Path $resultsPath 'source-register.csv'
-$sourceRows | Sort-Object relative_path | Export-Csv -LiteralPath $sourceRegister -NoTypeInformation -Encoding UTF8
+if ($sourceRows.Count -gt 0) {
+    $sourceRows | Sort-Object relative_path | Export-Csv -LiteralPath $sourceRegister -NoTypeInformation -Encoding UTF8
+} else {
+    [System.IO.File]::WriteAllText(
+        $sourceRegister,
+        '"relative_path","format","target_mib","actual_mib","sha256","source_url","source_description"' + [Environment]::NewLine,
+        (New-Object System.Text.UTF8Encoding -ArgumentList $false)
+    )
+}
+
 $missingPath = Join-Path $resultsPath 'download-missing.txt'
 [System.IO.File]::WriteAllLines($missingPath, $missingRows, (New-Object System.Text.UTF8Encoding -ArgumentList $false))
 
