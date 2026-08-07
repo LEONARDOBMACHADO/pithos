@@ -1,0 +1,103 @@
+﻿[
+    {
+        "branch":  "perf/01-group-decode-once",
+        "commit":  "edc8965d1ef7d5f67e757d478cee10df53097675",
+        "compressor":  "pithos",
+        "profile":  "archive-max",
+        "original_bytes":  499318122,
+        "archive_bytes":  88506478,
+        "savings_percent":  82.274531,
+        "compress_ms":  [
+                            "Contêiner empacotado com sucesso.",
+                            283326.925
+                        ],
+        "verify_ms":  [
+                          "Integridade verificada: 40 entradas, 1 grupos, raiz BLAKE3 33bfb26604b423006f3950b5a07a86fda1101b1e8bfcf9167413676048d3d84c",
+                          7441.763
+                      ],
+        "decompress_ms":  [
+                              "Contêiner desempacotado com sucesso.",
+                              7996.402
+                          ],
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    },
+    {
+        "branch":  "perf/01-group-decode-once",
+        "commit":  "edc8965d1ef7d5f67e757d478cee10df53097675",
+        "compressor":  "7zip",
+        "profile":  "lzma2-mx9-solid",
+        "original_bytes":  499318122,
+        "archive_bytes":  86352019,
+        "savings_percent":  82.706011,
+        "compress_ms":  [
+                            "",
+                            "7-Zip 24.08 (x64) : Copyright (c) 1999-2024 Igor Pavlov : 2024-08-11",
+                            "",
+                            "Scanning the drive:",
+                            "9 folders, 31 files, 499318122 bytes (477 MiB)",
+                            "",
+                            "Creating archive: C:\\Projetos\\TESTE\\tst_compact\\results\\stack-work\\combined.7z",
+                            "",
+                            "Add new data to archive: 9 folders, 31 files, 499318122 bytes (477 MiB)",
+                            "",
+                            "",
+                            "Files read from disk: 31",
+                            "Archive size: 86352019 bytes (83 MiB)",
+                            "Everything is Ok",
+                            67878.948
+                        ],
+        "verify_ms":  [
+                          "",
+                          "7-Zip 24.08 (x64) : Copyright (c) 1999-2024 Igor Pavlov : 2024-08-11",
+                          "",
+                          "Scanning the drive for archives:",
+                          "1 file, 86352019 bytes (83 MiB)",
+                          "",
+                          "Testing archive: C:\\Projetos\\TESTE\\tst_compact\\results\\stack-work\\combined.7z",
+                          "--",
+                          "Path = C:\\Projetos\\TESTE\\tst_compact\\results\\stack-work\\combined.7z",
+                          "Type = 7z",
+                          "Physical Size = 86352019",
+                          "Headers Size = 1030",
+                          "Method = Delta LZMA2:26",
+                          "Solid = +",
+                          "Blocks = 2",
+                          "",
+                          "Everything is Ok",
+                          "",
+                          "Folders: 9",
+                          "Files: 31",
+                          "Size:       499318122",
+                          "Compressed: 86352019",
+                          3439.15
+                      ],
+        "decompress_ms":  [
+                              "",
+                              "7-Zip 24.08 (x64) : Copyright (c) 1999-2024 Igor Pavlov : 2024-08-11",
+                              "",
+                              "Scanning the drive for archives:",
+                              "1 file, 86352019 bytes (83 MiB)",
+                              "",
+                              "Extracting archive: C:\\Projetos\\TESTE\\tst_compact\\results\\stack-work\\combined.7z",
+                              "--",
+                              "Path = C:\\Projetos\\TESTE\\tst_compact\\results\\stack-work\\combined.7z",
+                              "Type = 7z",
+                              "Physical Size = 86352019",
+                              "Headers Size = 1030",
+                              "Method = Delta LZMA2:26",
+                              "Solid = +",
+                              "Blocks = 2",
+                              "",
+                              "Everything is Ok",
+                              "",
+                              "Folders: 9",
+                              "Files: 31",
+                              "Size:       499318122",
+                              "Compressed: 86352019",
+                              3711.508
+                          ],
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    }
+]
