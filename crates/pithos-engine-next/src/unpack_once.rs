@@ -54,7 +54,12 @@ pub fn unpack_with_control_and_temp_limit(
     let original_bytes = catalog
         .entries
         .iter()
-        .filter(|entry| matches!(entry.kind, EntryKind::File { .. } | EntryKind::Hardlink { .. }))
+        .filter(|entry| {
+            matches!(
+                entry.kind,
+                EntryKind::File { .. } | EntryKind::Hardlink { .. }
+            )
+        })
         .try_fold(0_u64, |total, entry| {
             total
                 .checked_add(entry.size)
@@ -319,8 +324,8 @@ fn decode_group_once(
         CodecId::from_u16(codec.codec_id).ok_or(PithosError::UnsupportedCodec)?
     };
 
-    let capacity = usize::try_from(record.group.uncompressed_len)
-        .map_err(|_| PithosError::MemoryLimit)?;
+    let capacity =
+        usize::try_from(record.group.uncompressed_len).map_err(|_| PithosError::MemoryLimit)?;
     let mut decoded = Vec::with_capacity(capacity);
     codec_for_id(codec_id).decode(
         &mut std::io::Cursor::new(payload),
@@ -390,7 +395,12 @@ fn read_checked_section(
     section: &SectionDirectoryRecord,
     limits: &DecodeLimits,
 ) -> Result<Vec<u8>> {
-    let bytes = read_exact_vec(file, section.offset, section.length, limits.max_metadata_bytes)?;
+    let bytes = read_exact_vec(
+        file,
+        section.offset,
+        section.length,
+        limits.max_metadata_bytes,
+    )?;
     if crc32c::crc32c(&bytes) != section.crc32c {
         return Err(PithosError::ChecksumMismatch);
     }
@@ -517,7 +527,13 @@ mod tests {
             output_dir: output.clone(),
         })
         .unwrap();
-        assert_eq!(fs::read(output.join("a.txt")).unwrap(), fs::read(a).unwrap());
-        assert_eq!(fs::read(output.join("b.txt")).unwrap(), fs::read(b).unwrap());
+        assert_eq!(
+            fs::read(output.join("a.txt")).unwrap(),
+            fs::read(a).unwrap()
+        );
+        assert_eq!(
+            fs::read(output.join("b.txt")).unwrap(),
+            fs::read(b).unwrap()
+        );
     }
 }
