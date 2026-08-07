@@ -47,8 +47,8 @@ tst_compact/
   results/       # gerado; não entra no corpus nem no Git
 ```
 
-Não coloque outputs `.phs`, `.zip`, `.rar` ou `.7z` gerados pelos benchmarks nas
-pastas de entrada. O runner usa `results/` para todos os artefatos temporários.
+Não coloque outputs `.pits`, `.zip`, `.rar` ou `.7z` gerados pelos benchmarks
+nas pastas de entrada. O runner usa `results/` para todos os artefatos temporários.
 
 ## Matriz inicial de formatos
 
@@ -100,6 +100,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\fetch-tst-compact-
 O downloader:
 
 - consulta `https://samplefile.com/samples/api/files?format=<extensão>`;
+- aceita respostas diretas e wrappers `files`, `results`, `items`, `fixtures` ou
+  `data`, evitando dependência de uma única forma do JSON;
+- tenta `api/random` como fallback quando a listagem não oferece fixture usável;
 - tenta 29 alvos de formato/tamanho da matriz acima;
 - escolhe o fixture disponível mais próximo do tamanho-alvo;
 - baixa para a subpasta correta;
@@ -121,8 +124,8 @@ byte-exact.
 ## Fontes de download
 
 Preferir fontes que publiquem fixtures reais e checksum. Para o primeiro corpus,
-`https://samplefile.com/` é a fonte-base: possui uma biblioteca grande de
-formatos, diversos tamanhos e SHA-256 publicado por fixture.
+`https://samplefile.com/` é a fonte-base: possui biblioteca ampla de formatos,
+diversos tamanhos e SHA-256 publicado por fixture.
 
 Para código/binários adicionais, use somente projetos open-source/repositórios ou
 releases oficiais. Não baixe executáveis aleatórios de sites de terceiros apenas
@@ -169,6 +172,9 @@ Isso produz em `tst_compact/results/`:
 
 - `corpus-manifest.csv`: path, extensão, bytes, MiB, SHA-256 e timestamp;
 - `corpus-summary.txt`: quantidade, total, média e distribuição por extensão.
+
+O inventário também é válido para corpus vazio: ele produz headers e totais zero
+em vez de falhar. Isso serve para evidenciar falhas de aquisição sem mascará-las.
 
 O SHA-256 é a identidade do corpus. Uma futura comparação só é considerada
 comparável ao baseline se o manifesto for o mesmo, ou se a mudança de corpus for
@@ -234,20 +240,21 @@ O baseline já produz:
 - custo das referências;
 - `net_saved_bytes` e ganho percentual potencial do exact dedup.
 
-A economia de exact dedup nesta etapa é explicitamente **potencial**: C3 ainda é
-format-neutral. Depois da integração física da `ChunkTable`, o mesmo corpus será
-rodado novamente e o ganho deverá aparecer também no tamanho real do `.phs`.
+A economia de exact dedup nesta etapa é explicitamente **potencial**: C3 está
+validado, mas o plano continua format-neutral. Depois da integração física da
+`ChunkTable`, o mesmo corpus será rodado novamente e o ganho deverá aparecer
+também no tamanho real do `.pits`.
 
-## Regra de naming `.phs`
+## Regra de naming `.pits`
 
-Novos arquivos Pithos usam `.phs`:
+Novos arquivos Pithos usam exclusivamente `.pits`:
 
 ```text
-report.pdf      -> report.pdf.phs
-Project/        -> Project.phs
-A.txt + B.bin   -> files.phs
+report.pdf      -> report.pdf.pits
+Project/        -> Project.pits
+A.txt + B.bin   -> files.pits
 ```
 
-`--output/-o` continua permitindo nome explícito. `.pithos` permanece legado e
-`.pts`, usado provisoriamente durante desenvolvimento, continua legível mas não é
-a extensão pública a ser associada ao Pithos.
+`--output/-o` continua permitindo nome explícito. `.phs`, `.pts` e `.pithos`
+permanecem apenas como aliases de leitura durante desenvolvimento/transição; não
+são nomes gerados para novos archives.
