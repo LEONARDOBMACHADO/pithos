@@ -76,10 +76,37 @@ impl IpcEndpoint {
 }
 
 fn normalize_state_dir(path: PathBuf) -> PathBuf {
-    let resolved = std::fs::canonicalize(&path)
-        .or_else(|_| std::path::absolute(&path).map(lexically_normalize_absolute))
+    let absolute = std::path::absolute(&path)
+        .map(lexically_normalize_absolute)
         .unwrap_or(path);
+    let resolved = canonicalize_with_missing_tail(&absolute).unwrap_or(absolute);
     stable_state_dir_path(resolved)
+}
+
+fn canonicalize_with_missing_tail(path: &std::path::Path) -> io::Result<PathBuf> {
+    let mut current = path;
+    let mut missing = Vec::new();
+    loop {
+        match std::fs::canonicalize(current) {
+            Ok(mut resolved) => {
+                for component in missing.iter().rev() {
+                    resolved.push(component);
+                }
+                return Ok(resolved);
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                let Some(component) = current.file_name() else {
+                    return Err(error);
+                };
+                missing.push(component.to_os_string());
+                let Some(parent) = current.parent() else {
+                    return Err(error);
+                };
+                current = parent;
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 #[cfg(unix)]
