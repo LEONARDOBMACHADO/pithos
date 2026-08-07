@@ -8,9 +8,10 @@ mod daemon_client;
 
 pub use daemon_client::{DaemonClient, DaemonClientError, default_daemon_state_dir};
 
-pub const PITHOS_EXTENSION: &str = "phs";
+pub const PITHOS_EXTENSION: &str = "pits";
 pub const LEGACY_PITHOS_EXTENSION: &str = "pithos";
-pub const PROVISIONAL_PITHOS_EXTENSION: &str = "pts";
+pub const LEGACY_PHS_EXTENSION: &str = "phs";
+pub const LEGACY_PTS_EXTENSION: &str = "pts";
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CliProfile {
@@ -58,19 +59,19 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Empacotar arquivos em um contêiner .phs
+    /// Empacotar arquivos em um contêiner .pits
     Pack {
         #[arg(required = true)]
         inputs: Vec<std::path::PathBuf>,
 
-        /// Output archive. Defaults to <input-name>.phs for one input or files.phs for many.
+        /// Output archive. Defaults to <input-name>.pits for one input or files.pits for many.
         #[arg(short, long)]
         output: Option<std::path::PathBuf>,
 
         #[arg(long, value_enum, default_value_t = CliProfile::Raw)]
         profile: CliProfile,
     },
-    /// Extrair conteúdo de um contêiner .phs (arquivos legados continuam aceitos)
+    /// Extrair conteúdo de um contêiner .pits (arquivos legados continuam aceitos)
     Unpack {
         archive: std::path::PathBuf,
 
@@ -105,19 +106,29 @@ pub enum Commands {
 
 /// Computes the canonical default archive path without consulting filesystem state.
 ///
-/// One input preserves its full file/directory name and appends `.phs`:
-/// `report.pdf -> report.pdf.phs`, `Project -> Project.phs`.
-/// Multiple inputs intentionally use the predictable `files.phs` name.
+/// One input preserves its full file/directory name and appends `.pits`:
+/// `report.pdf -> report.pdf.pits`, `Project -> Project.pits`.
+/// Multiple inputs intentionally use the predictable `files.pits` name.
+///
+/// A bare relative filename is explicitly rooted at `.` so the engine receives
+/// a valid parent directory on Windows instead of an empty parent path.
 pub fn default_archive_path(inputs: &[PathBuf]) -> PathBuf {
     if inputs.len() == 1 {
         let input = &inputs[0];
         if let Some(file_name) = input.file_name() {
             let mut output_name: OsString = file_name.to_os_string();
-            output_name.push(".phs");
-            return input.with_file_name(output_name);
+            output_name.push(".pits");
+            let output = input.with_file_name(output_name);
+            if output
+                .parent()
+                .is_some_and(|parent| parent.as_os_str().is_empty())
+            {
+                return PathBuf::from(".").join(output);
+            }
+            return output;
         }
     }
-    PathBuf::from("files.phs")
+    PathBuf::from(".").join("files.pits")
 }
 
 pub fn is_pithos_archive_path(path: &Path) -> bool {
@@ -126,7 +137,8 @@ pub fn is_pithos_archive_path(path: &Path) -> bool {
         .is_some_and(|extension| {
             extension.eq_ignore_ascii_case(PITHOS_EXTENSION)
                 || extension.eq_ignore_ascii_case(LEGACY_PITHOS_EXTENSION)
-                || extension.eq_ignore_ascii_case(PROVISIONAL_PITHOS_EXTENSION)
+                || extension.eq_ignore_ascii_case(LEGACY_PHS_EXTENSION)
+                || extension.eq_ignore_ascii_case(LEGACY_PTS_EXTENSION)
         })
 }
 
@@ -182,20 +194,21 @@ mod tests {
     }
 
     #[test]
-    fn default_phs_naming_is_predictable() {
+    fn default_pits_naming_is_predictable() {
         assert_eq!(
             default_archive_path(&[PathBuf::from("report.pdf")]),
-            PathBuf::from("report.pdf.phs")
+            PathBuf::from(".").join("report.pdf.pits")
         );
         assert_eq!(
             default_archive_path(&[PathBuf::from("folder")]),
-            PathBuf::from("folder.phs")
+            PathBuf::from(".").join("folder.pits")
         );
         assert_eq!(
             default_archive_path(&[PathBuf::from("a.bin"), PathBuf::from("b.bin")]),
-            PathBuf::from("files.phs")
+            PathBuf::from(".").join("files.pits")
         );
-        assert!(is_pithos_archive_path(Path::new("new.phs")));
+        assert!(is_pithos_archive_path(Path::new("new.pits")));
+        assert!(is_pithos_archive_path(Path::new("legacy.phs")));
         assert!(is_pithos_archive_path(Path::new("provisional.pts")));
         assert!(is_pithos_archive_path(Path::new("legacy.pithos")));
         assert!(!is_pithos_archive_path(Path::new("archive.zip")));
@@ -208,17 +221,17 @@ mod tests {
             "--output-format",
             "json",
             "list",
-            "archive.phs",
+            "archive.pits",
         ])
         .unwrap();
         assert!(matches!(cli.output_format, OutputFormat::Json));
 
-        assert!(Cli::try_parse_from(["pithos", "extract", "archive.phs", "entry.txt"]).is_err());
+        assert!(Cli::try_parse_from(["pithos", "extract", "archive.pits", "entry.txt"]).is_err());
         assert!(
             Cli::try_parse_from([
                 "pithos",
                 "extract",
-                "archive.phs",
+                "archive.pits",
                 "entry.txt",
                 "--stdout",
                 "--output",
