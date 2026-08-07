@@ -70,12 +70,7 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         "relative_path,extension,codec,level,input_bytes,output_bytes,compression_ratio,savings_percent,encode_ms,decode_ms,throughput_encode_mib_s,throughput_decode_mib_s,memory_bound_bytes,roundtrip_ok"
     )?;
 
-    let codecs: [(&str, &dyn Codec); 4] = [
-        ("store", &StoreCodec),
-        ("zstd", &ZstdCodec),
-        ("brotli", &BrotliCodec),
-        ("lzma2", &Lzma2Codec),
-    ];
+    let codecs: [&dyn Codec; 4] = [&StoreCodec, &ZstdCodec, &BrotliCodec, &Lzma2Codec];
 
     let corpus_root = fs::canonicalize(&args.corpus)?;
     let mut records = 0_usize;
@@ -96,7 +91,8 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or("")
             .to_ascii_lowercase();
 
-        for (name, codec) in codecs {
+        for codec in codecs {
+            let name = codec_id_name(codec.id());
             let config = CodecConfig::deterministic_default(codec.id());
             let memory_bound = codec.memory_bound(input.len() as u64, &config)?;
 
@@ -133,8 +129,14 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
                 savings_percent: (1.0 - ratio) * 100.0,
                 encode_ms: encode_elapsed.as_millis(),
                 decode_ms: decode_elapsed.as_millis(),
-                throughput_encode_mib_s: throughput_mib_s(stats.input_bytes, encode_elapsed.as_secs_f64()),
-                throughput_decode_mib_s: throughput_mib_s(stats.input_bytes, decode_elapsed.as_secs_f64()),
+                throughput_encode_mib_s: throughput_mib_s(
+                    stats.input_bytes,
+                    encode_elapsed.as_secs_f64(),
+                ),
+                throughput_decode_mib_s: throughput_mib_s(
+                    stats.input_bytes,
+                    decode_elapsed.as_secs_f64(),
+                ),
                 memory_bound_bytes: memory_bound,
                 roundtrip_ok,
             };
@@ -147,7 +149,10 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
 
     jsonl.flush()?;
     csv.flush()?;
-    println!("codec benchmark complete: {records} records; results: {}", results.display());
+    println!(
+        "codec benchmark complete: {records} records; results: {}",
+        results.display()
+    );
     Ok(())
 }
 
