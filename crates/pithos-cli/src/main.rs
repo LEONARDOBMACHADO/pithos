@@ -2,7 +2,7 @@ use clap::Parser;
 use pithos_agent_api::{ApiProfile, PathScope, ReadRangeResult};
 use pithos_cli::{
     Cli, CliProfile, Commands, DaemonClient, DaemonClientError, ExecutionMode, OutputFormat,
-    default_daemon_state_dir,
+    default_archive_path, default_daemon_state_dir,
 };
 use pithos_core::{CompressionProfile, PithosError};
 use pithos_engine::{
@@ -76,16 +76,19 @@ fn run_standalone(command: Commands, output_format: OutputFormat) -> Result<(), 
             &json!({
                 "version": env!("CARGO_PKG_VERSION"),
                 "format": "PAF 0.1-draft",
+                "extension": ".pts",
+                "legacy_extension": ".pithos",
                 "codecs": ["STORE", "Zstandard", "Brotli", "LZMA2"],
                 "profiles": ["raw", "stream", "random", "balanced", "archive-max"],
             }),
-            "Pithos R1 v0.1.0 (PAF 0.1-draft)\nCodecs implementados: STORE, Zstandard, Brotli, LZMA2\nPerfis: raw, stream, random, balanced, archive-max",
+            "Pithos R1 v0.1.0 (PAF 0.1-draft, .pts)\nCodecs implementados: STORE, Zstandard, Brotli, LZMA2\nPerfis: raw, stream, random, balanced, archive-max",
         )?,
         Commands::Pack {
             inputs,
             output,
             profile,
         } => {
+            let output = output.unwrap_or_else(|| default_archive_path(&inputs));
             pack(PackRequest {
                 inputs,
                 output: output.clone(),
@@ -193,12 +196,12 @@ async fn run_daemon(
             output,
             profile,
         } => {
-            let requested_output = output.clone();
+            let requested_output = output.unwrap_or_else(|| default_archive_path(&inputs));
             let prepared_inputs = inputs
                 .iter()
                 .map(|path| prepare_read_path(path))
                 .collect::<Result<Vec<_>, _>>()?;
-            let (output, write_root) = prepare_write_path(&output)?;
+            let (output, write_root) = prepare_write_path(&requested_output)?;
             let scope = path_scope(&prepared_inputs, &[write_root]);
             let inputs = prepared_inputs
                 .iter()
