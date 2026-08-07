@@ -13,10 +13,15 @@ path = "src/main.rs"
 name = "pithos-phasebench"
 path = "src/phasebench.rs"
 
+[[bin]]
+name = "pithos-codecbench"
+path = "src/codecbench.rs"
+
 [dependencies]
 pithos-core = { path = "../pithos-core" }
 pithos-engine = { path = "../pithos-engine" }
 pithos-analysis = { path = "../pithos-analysis" }
+pithos-codecs = { path = "../pithos-codecs" }
 pithos-telemetry = { path = "../pithos-telemetry" }
 clap.workspace = true
 serde.workspace = true
