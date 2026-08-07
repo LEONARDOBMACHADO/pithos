@@ -24,14 +24,30 @@ The working tree should be clean before validation.
 
 ### Windows / PowerShell
 
-From the repository root:
+The Windows implementation lives in `scripts/validate-gate-c3-windows.ps1`.
+`scripts/validate-gate-c3.ps1` is only a compatibility wrapper.
+
+From the repository root, first execute the fast runner self-test:
 
 ```text
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; [void][scriptblock]::Create([System.IO.File]::ReadAllText('.\scripts\validate-gate-c3.ps1')); Write-Host 'PARSE_OK'"
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate-gate-c3.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate-gate-c3-windows.ps1 -SelfTest
+```
+
+It must print `SELF_TEST_OK`. This tests PowerShell 5.1 runtime compatibility,
+UTF-8 evidence writing and native-process capture without starting the expensive
+Rust validation.
+
+Only after `SELF_TEST_OK`, run the complete Gate C3 validation:
+
+```text
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate-gate-c3-windows.ps1
 ```
 
 PowerShell 5.1 or newer is sufficient. PowerShell 7 is not required.
+
+The full runner executes its self-test again before creating the validation run.
+It also writes `BOOTSTRAP.txt` immediately after creating the evidence directory,
+so an unexpected later runner failure still leaves versionable diagnostic evidence.
 
 The Windows runner performs the 10,000-run libFuzzer campaign with
 `--sanitizer none`. This keeps Gate C3 focused on deterministic functional fuzzing
@@ -72,12 +88,15 @@ cargo llvm-cov --workspace --all-targets --all-features --fail-under-lines 80
 The evidence directory also records:
 
 ```text
+runner version
 branch
 commit SHA
 OS / architecture
-PowerShell version
+PowerShell version and edition
 rustc --version --verbose
 cargo --version
+cargo-fuzz --version
+cargo-llvm-cov --version
 rustup toolchain list
 git status --short
 start/end timestamps
@@ -87,7 +106,7 @@ fuzz sanitizer mode
 
 Each command gets a `.log` file even when it produces no output. Native stdout
 and stderr are captured directly through `System.Diagnostics.Process`, avoiding
-PowerShell's `RemoteException` wrappers in the evidence.
+PowerShell error-record conversion in the evidence.
 
 ## If a required local tool is missing
 
@@ -125,6 +144,9 @@ git add docs/gates/evidence/
 git commit -m "test: record local Gate C3 validation evidence"
 git push origin feat/phase3-exact-dedup
 ```
+
+Do not add unrelated local files such as `docs/gates/GATE_A_EVIDENCE.md` or
+`docs/gates/GATE_B_EVIDENCE.md` to the evidence commit.
 
 If `git add` reports that a generated evidence file is ignored, stop and record
 that exact message instead of using `git add -f`; the branch is configured so
