@@ -9,9 +9,14 @@ license.workspace = true
 name = "pithos-bench"
 path = "src/main.rs"
 
+[[bin]]
+name = "pithos-phasebench"
+path = "src/phasebench.rs"
+
 [dependencies]
 pithos-core = { path = "../pithos-core" }
 pithos-engine = { path = "../pithos-engine" }
+pithos-analysis = { path = "../pithos-analysis" }
 pithos-telemetry = { path = "../pithos-telemetry" }
 clap.workspace = true
 serde.workspace = true
