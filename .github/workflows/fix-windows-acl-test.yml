@@ -1,0 +1,85 @@
+name: Apply Windows ACL Test Fix
+
+on:
+  push:
+    branches:
+      - "feat/phase3-exact-dedup"
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: feat/phase3-exact-dedup
+
+      - name: Patch Windows SDDL-equivalence assertion
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("crates/pithos-daemon/src/transport.rs")
+          text = path.read_text()
+          old = '''        let user_sid = current_user_sid_string().unwrap();
+                  let dacl = windows_path_dacl_sddl(&state_dir).unwrap();
+                  assert!(dacl.contains(&user_sid));
+                  assert!(dacl.contains("SY") || dacl.contains("S-1-5-18"));
+                  for forbidden in [";;;WD)", ";;;AN)", ";;;AU)", ";;;BU)"] {
+                      assert!(!dacl.contains(forbidden));
+                  }
+          '''
+          new = '''        let user_sid = current_user_sid_string().unwrap();
+                  let dacl = windows_path_dacl_sddl(&state_dir).unwrap();
+                  let current_user_present = dacl.contains(&user_sid)
+                      || (user_sid == "S-1-5-18" && dacl.contains("SY"));
+                  assert!(
+                      current_user_present,
+                      "restricted DACL does not contain current user SID {user_sid}: {dacl}"
+                  );
+                  assert!(
+                      dacl.contains("SY") || dacl.contains("S-1-5-18"),
+                      "restricted DACL does not contain LocalSystem: {dacl}"
+                  );
+                  for forbidden in [
+                      ";;;WD)",
+                      ";;;S-1-1-0)",
+                      ";;;AN)",
+                      ";;;S-1-5-7)",
+                      ";;;AU)",
+                      ";;;S-1-5-11)",
+                      ";;;BU)",
+                      ";;;S-1-5-32-545)",
+                  ] {
+                      assert!(
+                          !dacl.contains(forbidden),
+                          "restricted DACL contains forbidden principal {forbidden}: {dacl}"
+                      );
+                  }
+          '''
+          if old not in text:
+              raise SystemExit("Windows ACL assertion block not found")
+          path.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: Install Rustfmt
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt
+          rustup default stable
+
+      - name: Format
+        run: cargo fmt --all
+
+      - name: Commit fix
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/pithos-daemon/src/transport.rs
+          git commit -m "test: accept equivalent Windows SDDL SID forms"
+          git push origin HEAD:feat/phase3-exact-dedup
