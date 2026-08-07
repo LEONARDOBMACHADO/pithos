@@ -1,0 +1,358 @@
+[stdout]
+
+running 7 tests
+test tests::compression_profile_contract_is_complete_strict_and_backward_compatible ... ok
+test tests::capabilities_contract_supports_explicit_session_resumption ... ok
+test tests::duplicate_envelope_fields_and_batches_are_rejected ... ok
+test tests::json_rpc_response_can_never_contain_result_and_error_together ... ok
+test tests::strict_request_parser_accepts_valid_json_rpc_and_rejects_protocol_abuse ... ok
+test tests::public_job_contract_is_stable_and_strict ... ok
+test tests::request_parser_never_panics ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+
+
+running 8 tests
+test dedup::tests::duplicate_ids_and_resource_abuse_fail_closed ... ok
+test fingerprint::tests::synthetic_compact_collision_fails_closed_before_publication ... ok
+test dedup::tests::tiny_duplicates_are_not_referenced_when_metadata_would_lose ... ok
+test dedup::tests::compact_hash_collision_does_not_authorize_dedup ... ok
+test dedup::tests::even_a_forced_full_hash_collision_is_resolved_by_exact_bytes ... ok
+test dedup::tests::exact_duplicates_reference_the_canonical_chunk_when_beneficial ... ok
+test dedup::tests::input_order_and_parallelism_do_not_change_the_plan ... ok
+test dedup::tests::checkpoints_cancel_before_publishing_a_plan ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+
+running 3 tests
+test cost_model_keeps_non_beneficial_duplicates_physical ... ok
+test public_pipeline_never_deduplicates_different_bytes_after_compact_collision ... ok
+test gate_c3_detects_every_beneficial_exact_duplicate ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 13 tests
+test fingerprint_config_defaults_are_bounded_and_normative ... ok
+test compact_hashes_match_the_frozen_abc_vector ... ok
+test empty_chunk_is_supported_without_synthetic_superfeatures ... ok
+test full_hash_escalation_revalidates_the_compact_identity ... ok
+test parallel_fingerprinting_observes_thread_safe_cancellation ... ok
+test one_chunk_receives_every_compact_fingerprint_and_superfeature ... ok
+test paranoid_policy_retains_full_blake3_for_singletons ... ok
+test batch_is_sorted_deterministically_and_escalates_only_compact_collisions ... ok
+test full_hash_escalation_is_bounded_and_cancellable ... ok
+test batch_rejects_mismatched_lengths_duplicate_ids_and_resource_abuse ... ok
+test rolling_superfeatures_match_large_four_and_three_feature_vectors ... ok
+test parallelism_does_not_change_batch_output ... ok
+test streaming_matches_slice_and_rejects_short_or_trailing_input ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+
+
+running 27 tests
+test chunk_ids_are_assigned_after_deterministic_tuple_sorting ... ok
+test fastcdc_and_fixed_chunking_return_no_chunks_for_empty_inputs ... ok
+test empty_microfile_draft_receives_a_stable_global_chunk_id ... ok
+test every_chunking_path_enforces_the_configured_logical_byte_limit ... ok
+test chunk_offsets_fail_closed_on_u64_overflow ... ok
+test default_config_is_normative_and_valid ... ok
+test coverage_validation_rejects_gaps_overlaps_zero_lengths_and_wrong_origin ... ok
+test config_rejects_invalid_size_relations_and_resource_limits ... ok
+test fixed_high_entropy_chunking_handles_tail_and_exact_multiple ... ok
+test fixed_high_entropy_supports_the_normative_one_to_four_mib_edges ... ok
+test sorting_and_validation_passes_expose_cooperative_cancellation ... ok
+test streaming_fastcdc_checkpoints_each_underlying_read ... ok
+test streaming_fastcdc_propagates_io_errors ... ok
+test streaming_fastcdc_stops_reading_at_the_logical_byte_limit ... ok
+test structural_chunking_rejects_noncanonical_or_incomplete_boundaries ... ok
+test fixed_chunking_preserves_coverage_for_arbitrary_lengths ... ok
+test streaming_fastcdc_observes_cancellation_checkpoint ... ok
+test in_memory_and_fixed_paths_expose_cooperative_cancellation ... ok
+test max_chunks_is_enforced_before_unbounded_chunk_metadata_growth ... ok
+test streaming_fastcdc_matches_the_slice_implementation_exactly ... ok
+test structural_chunking_preserves_scanner_ends_and_subchunks_large_regions ... ok
+test fastcdc_is_deterministic_and_covers_the_complete_logical_range ... ok
+test structural_streaming_matches_slice_and_rejects_short_or_trailing_data ... ok
+test fastcdc_v2020_boundaries_match_the_frozen_pithos_vector ... ok
+test fastcdc_resynchronizes_after_a_prefix_insertion ... ok
+test fastcdc_never_creates_a_gap_for_generated_content ... ok
+test streaming_boundaries_do_not_depend_on_reader_batch_size ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s
+
+
+running 14 tests
+test max_chunks_limits_pack_count_before_returning_a_partial_plan ... ok
+test empty_input_has_no_synthetic_pack_or_exclusion ... ok
+test compact_metadata_validation_rejects_corrupt_columns_and_offsets ... ok
+test public_validation_enforces_microfile_size_and_metadata_budgets ... ok
+test microfile_planning_exposes_cooperative_cancellation ... ok
+test public_microfile_validation_exposes_cooperative_cancellation ... ok
+test microfile_members_feed_global_logical_chunk_id_assignment ... ok
+test grouping_signals_define_member_proximity_before_path_tie_breaking ... ok
+test timestamp_delta_handles_the_full_i64_domain_without_overflow ... ok
+test eligibility_is_inclusive_at_64_kib_and_exclusions_are_explicit ... ok
+test duplicate_entry_ids_and_paths_fail_closed ... ok
+test planning_has_a_canonical_total_order_for_every_input_permutation ... ok
+test target_size_splits_packs_and_offsets_restart_without_gaps ... ok
+test zero_byte_files_are_preserved_with_canonical_metadata ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 9 tests
+test daemon_client::tests::capability_expiration_uses_the_daemon_deadline_boundary ... ok
+test daemon_client::tests::resumed_session_must_keep_the_original_identity ... ok
+test daemon_client::tests::missing_json_rpc_error_id_is_rejected_as_a_protocol_violation ... ok
+test daemon_client::tests::client_job_limits_do_not_reserve_the_entire_daemon_for_one_job ... ok
+test daemon_client::tests::mismatched_json_rpc_error_id_is_rejected_as_a_protocol_violation ... ok
+test tests::raw_profile_is_explicit_and_defaults_to_raw ... ok
+test tests::standalone_is_the_default_and_daemon_endpoint_is_configurable ... ok
+test tests::output_format_is_global_and_extract_requires_one_destination ... ok
+test tests::every_phase_two_profile_is_accepted_with_stable_cli_spelling ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 4 tests
+test standalone_remains_the_default_without_a_daemon ... ok
+test daemon_mode_runs_the_complete_cli_archive_workflow_over_local_ipc ... ok
+test every_profile_restores_identical_bytes_in_standalone_and_daemon_modes ... ok
+test daemon_stdout_verifies_each_transfer_in_a_multi_chunk_entry ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.03s
+
+
+running 8 tests
+test tests::codec_memory_bounds_are_checked_and_nonzero ... ok
+test tests::codec_rejects_levels_outside_its_supported_range ... ok
+test tests::store_rejects_truncated_input ... ok
+test tests::mandatory_codec_conformance_vectors_have_stable_bytes ... ok
+test tests::every_mandatory_codec_round_trips_the_conformance_vector ... ok
+test tests::compressed_codecs_reject_corrupted_payloads ... ok
+test tests::decoder_rejects_output_larger_than_declared_length ... ok
+test tests::compressed_codecs_are_deterministic_for_fixed_parameters ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 51 tests
+test scheduler::tests::higher_priority_overtakes_queued_background_work ... ok
+test scheduler::tests::weighted_round_robin_prevents_priority_and_session_starvation ... ok
+test store::tests::close_serializes_with_concurrent_submissions_and_leaves_no_nonterminal_jobs ... ok
+test store::tests::concurrent_submission_limit_is_checked_inside_the_store_transaction ... ok
+test store::tests::commit_keeps_memory_equal_to_the_published_file_when_parent_sync_fails ... ok
+test store::tests::event_retention_is_bounded_and_preserves_monotonic_terminal_tail ... ok
+test store::tests::oversized_serialized_state_is_rejected_before_publication ... ok
+test store::tests::pack_identity_calculation_does_not_hold_the_registry_mutation_lock ... ok
+test store::tests::open_rejects_a_counter_that_can_reuse_an_existing_job_id ... ok
+test store::tests::recovery_fails_a_nonterminal_pack_without_a_verified_output ... ok
+test store::tests::open_rejects_dangling_idempotency_and_invalid_event_sequence ... ok
+test store::tests::close_cancels_queued_jobs_but_only_requests_cancellation_of_running_jobs ... ok
+test store::tests::deadline_expiration_applies_state_specific_transitions_atomically ... ok
+test store::tests::recovery_fails_closed_if_pack_published_before_its_identity_was_recorded ... ok
+test tests::daemon_configuration_rejects_memory_budgets_that_cannot_be_scheduled ... ok
+test tests::frame_reader_rejects_declared_size_before_allocating_payload ... ok
+test store::tests::retention_capacity_is_global_and_never_evicts_another_session ... ok
+test store::tests::recovery_rejects_a_different_valid_archive_at_the_recorded_output_path ... ok
+test store::tests::retention_capacity_never_discards_idempotency_results ... ok
+test tests::graceful_service_shutdown_atomically_closes_registry_admission ... ok
+test tests::quotas_rate_limit_and_path_scopes_fail_closed ... ok
+test store::tests::recovery_reconciles_an_archive_published_after_pack_started_as_completed ... ok
+test tests::local_ipc_roundtrip_uses_a_single_private_endpoint ... ok
+test tests::persistence_failure_stops_even_read_only_rpc_work ... ok
+test tests::expired_resume_sessions_fail_closed_and_are_pruned_on_create ... ok
+test tests::graceful_service_shutdown_cancels_queued_jobs_and_rejects_new_work ... ok
+test store::tests::recovery_does_not_claim_a_preexisting_valid_archive_for_a_pack_job ... ok
+test tests::daemon_applies_the_configured_event_retention_limit ... ok
+test tests::registry_enforces_idempotency_session_isolation_and_ordered_events ... ok
+test tests::rpc_rejects_oversized_frames_before_dispatch ... ok
+test tests::registry_recovers_interrupted_jobs_without_losing_terminal_results ... ok
+test tests::resumable_session_secret_survives_registry_restart_without_being_stored_in_plaintext ... ok
+test tests::rpc_cancel_stops_a_queued_job_without_publishing_output ... ok
+test transport::tests::bounded_client_exchange_rejects_oversized_response_before_payload_allocation ... ok
+test tests::rpc_cancel_interrupts_a_running_job_and_removes_its_spool ... ok
+test transport::tests::bounded_client_exchange_rejects_oversized_request_before_writing ... ok
+test transport::tests::listener_retries_only_errors_classified_as_transient ... ok
+test tests::rpc_pack_enforces_memory_while_scanning_input_metadata ... ok
+test tests::session_persistence_failure_also_stops_the_daemon ... ok
+test transport::tests::endpoint_derivation_normalizes_lexical_aliases ... ok
+test tests::server_scope_caps_the_roots_a_client_can_request ... ok
+test transport::tests::windows_security_descriptor_allows_only_current_user_and_system ... ok
+test transport::tests::configurable_response_timeout_allows_long_poll_responses ... ok
+test tests::rpc_deadline_expires_while_a_job_is_still_queued ... ok
+test transport::tests::windows_state_directory_gets_restricted_acl_and_rejects_reparse_points ... ok
+test tests::rpc_extract_enforces_temporary_bytes_before_creating_output ... ok
+test transport::tests::shutdown_terminates_open_connection_tasks ... ok
+test tests::rpc_pack_job_is_idempotent_observable_and_isolated_between_sessions ... ok
+test tests::rpc_session_resume_recovers_jobs_and_idempotency_after_daemon_restart ... ok
+test store::tests::deadline_and_scheduler_transition_never_lose_the_atomic_state_race ... ok
+test tests::all_agent_methods_complete_a_real_archive_workflow ... ok
+
+test result: ok. 51 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.65s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+test forced_restart_never_leaves_a_corrupt_final_archive ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.78s
+
+
+running 2 tests
+test tests::scan_inputs_enforces_memory_budget_while_collecting ... ok
+test tests::compressed_hash_rejects_same_length_replacement_after_scan ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+
+running 6 tests
+test pack_resource_estimates_are_profile_aware_conservative_and_checked ... ok
+test compressed_pack_honors_memory_budget_independently_from_temp_budget ... ok
+test compressed_profiles_preserve_empty_files ... ok
+test compressed_output_is_byte_deterministic ... ok
+test balanced_roundtrip_uses_registry_and_one_logical_solid_group ... ok
+test all_non_raw_profiles_pack_and_verify ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+
+
+running 5 tests
+test scheduler_queue_capacity_is_bounded_from_worker_count ... ok
+test scheduler_rejects_cycles_oversized_jobs_and_observes_cancellation ... ok
+test scheduler_rejects_payload_larger_than_reserved_output_bound ... ok
+test scheduler_enforces_weighted_memory_budget ... ok
+test scheduler_honors_dag_priority_and_returns_deterministic_spool_order ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+
+running 9 tests
+test tests::archive_path_rejects_parent_and_absolute_components ... ok
+test tests::codec_registry_roundtrips_stable_chain_records ... ok
+test tests::codec_registry_rejects_unknown_required_codec ... ok
+test tests::footer_crc_covers_reserved_tail ... ok
+test tests::archive_path_rejects_windows_prefixes_and_device_names ... ok
+test tests::link_target_cannot_resolve_above_archive_root ... ok
+test tests::codec_registry_rejects_duplicate_chains_and_declared_size_abuse ... ok
+test tests::header_roundtrip_covers_section_count_crc_and_version ... ok
+test tests::fixed_record_decoders_never_panic ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 5 tests
+test tests::groups_preserve_logical_order_and_do_not_split_large_items ... ok
+test tests::planning_and_candidate_cost_reject_integer_overflow ... ok
+test tests::profile_targets_match_the_phase_two_contract ... ok
+test tests::solid_groups_keep_empty_items_in_their_logical_position ... ok
+test tests::raw_profile_keeps_every_item_independent_including_empty_files ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 19 tests
+test tests::gate_a_invalid_and_truncated_inputs_are_rejected ... ok
+test tests::gate_a_pre_cancel_does_not_publish_archive ... ok
+test tests::gate_a_non_utf16_windows_path_roundtrips_losslessly ... ok
+test tests::gate_a_rejects_bomb_declarations_before_allocation ... ok
+test tests::gate_a_limits_and_no_clobber_are_enforced ... ok
+test tests::gate_a_rejects_overlapping_sections ... ok
+test tests::phase_1_daemon_operations_honor_external_cancellation_and_ranges ... ok
+test tests::gate_a_output_is_byte_deterministic ... ok
+test tests::gate_a_corruption_is_detected_and_unpack_is_transactional ... ok
+test tests::gate_a_hardlinks_roundtrip ... ok
+test tests::phase_1_pack_budget_stops_before_publishing_an_oversized_archive ... ok
+test tests::gate_a_single_file_and_empty_directory_are_valid_inputs ... ok
+test tests::phase_1_listing_and_inspection_do_not_read_payload ... ok
+test tests::phase_1_stream_extract_and_directory_extract_are_safe ... ok
+test tests::gate_a_roundtrip_covers_empty_one_byte_random_nested_unicode_and_empty_dir ... ok
+test tests::phase_1_extract_reads_only_the_requested_group_and_rejects_unsafe_selector ... ok
+test tests::phase_1_decode_budget_counts_all_metadata_sections_together ... ok
+test tests::gate_a_full_archive_parser_never_panics ... ok
+test tests::gate_a_every_sampled_archive_region_is_integrity_protected ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.71s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+[stderr]
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.54s
+     Running unittests src\lib.rs (target\debug\deps\pithos_agent_api-ed326b7809494e17.exe)
+     Running unittests src\lib.rs (target\debug\deps\pithos_analysis-e20c33fd4a757ca2.exe)
+     Running tests\exact_dedup.rs (target\debug\deps\exact_dedup-ed89fd264eac70da.exe)
+     Running tests\fingerprints.rs (target\debug\deps\fingerprints-c801d2e226b3fafc.exe)
+     Running tests\logical_chunking.rs (target\debug\deps\logical_chunking-0ec3ea87e03c23e3.exe)
+proptest: FileFailurePersistence::SourceParallel set, but failed to find lib.rs or main.rs
+proptest: FileFailurePersistence::SourceParallel set, but failed to find lib.rs or main.rs
+     Running tests\micro_file_pack.rs (target\debug\deps\micro_file_pack-a78b816c77ae5ae5.exe)
+     Running unittests src\lib.rs (target\debug\deps\pithos_cli-35f937c583b7e5e7.exe)
+     Running unittests src\main.rs (target\debug\deps\pithos-8e498b2e03051569.exe)
+     Running tests\daemon_mode.rs (target\debug\deps\daemon_mode-dc03b613ed22f2ca.exe)
+CLI arguments failed: ["--output-format", "json", "--daemon-state-dir", "unused", "capabilities"]
+     Running unittests src\lib.rs (target\debug\deps\pithos_codecs-12a740cea37448f6.exe)
+     Running unittests src\lib.rs (target\debug\deps\pithos_core-1fe0f7dcf22b8892.exe)
+     Running unittests src\lib.rs (target\debug\deps\pithos_daemon-9f04dd42a87e5ddb.exe)
+     Running unittests src\main.rs (target\debug\deps\pithosd-1eec3b80264129ed.exe)
+     Running tests\ipc_process.rs (target\debug\deps\ipc_process-ff528c4a483847be.exe)
+     Running unittests src\lib.rs (target\debug\deps\pithos_engine-8b7064788e61f3e9.exe)
+     Running tests\compressed_profiles.rs (target\debug\deps\compressed_profiles-d7a6bb6e2219593e.exe)
+     Running tests\scheduler.rs (target\debug\deps\scheduler-988b2447027fc122.exe)
+     Running unittests src\lib.rs (target\debug\deps\pithos_format-d0f0c6b18fb52891.exe)
+     Running unittests src\lib.rs (target\debug\deps\pithos_io-a146fb1ad59ff6b3.exe)
+     Running unittests src\lib.rs (target\debug\deps\pithos_mount-d108c2d3f3c5635e.exe)
+     Running unittests src\main.rs (target\debug\deps\pithos_mount-0fd49874f20cc587.exe)
+     Running unittests src\lib.rs (target\debug\deps\pithos_planner-191eb00a7763479e.exe)
+     Running unittests src\lib.rs (target\debug\deps\pithos_recompress-08fdf3437a3f8aa8.exe)
+     Running unittests src\lib.rs (target\debug\deps\pithos_testkit-330469768146dfc3.exe)
+     Running unittests src\lib.rs (target\debug\deps\pithos_transforms-c25dc847c5d233d7.exe)
+     Running unittests src\lib.rs (target\debug\deps\pithos_viewer-fad0bd96ab73f279.exe)
+     Running unittests src\main.rs (target\debug\deps\pithos_explorer-dfb17b94631fc5d9.exe)

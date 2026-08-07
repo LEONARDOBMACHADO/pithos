@@ -1,0 +1,5 @@
+name=02_build_workspace
+command=cargo build --workspace --all-targets --all-features
+started_utc=2026-08-07T13:57:35.2294805Z
+ended_utc=2026-08-07T13:58:05.3589880Z
+exit_code=0

@@ -1,0 +1,5 @@
+name=10_exact_dedup_fuzz_10k
+command=cargo +nightly fuzz run --sanitizer none exact_dedup -- -runs=10000 -max_len=65536
+started_utc=2026-08-07T13:59:03.6139219Z
+ended_utc=2026-08-07T13:59:22.8914850Z
+exit_code=1

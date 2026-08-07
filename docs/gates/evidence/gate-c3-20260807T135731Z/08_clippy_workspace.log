@@ -1,0 +1,6 @@
+[stderr]
+    Checking pithos-analysis v0.1.0 (C:\Projetos\TESTE\crates\pithos-analysis)
+    Checking pithos-testkit v0.1.0 (C:\Projetos\TESTE\crates\pithos-testkit)
+    Checking pithos-cli v0.1.0 (C:\Projetos\TESTE\crates\pithos-cli)
+    Checking pithos-daemon v0.1.0 (C:\Projetos\TESTE\crates\pithos-daemon)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.12s

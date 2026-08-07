@@ -1,0 +1,99 @@
+[stdout]
+
+running 8 tests
+test dedup::tests::duplicate_ids_and_resource_abuse_fail_closed ... ok
+test fingerprint::tests::synthetic_compact_collision_fails_closed_before_publication ... ok
+test dedup::tests::even_a_forced_full_hash_collision_is_resolved_by_exact_bytes ... ok
+test dedup::tests::tiny_duplicates_are_not_referenced_when_metadata_would_lose ... ok
+test dedup::tests::compact_hash_collision_does_not_authorize_dedup ... ok
+test dedup::tests::exact_duplicates_reference_the_canonical_chunk_when_beneficial ... ok
+test dedup::tests::input_order_and_parallelism_do_not_change_the_plan ... ok
+test dedup::tests::checkpoints_cancel_before_publishing_a_plan ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+
+running 3 tests
+test cost_model_keeps_non_beneficial_duplicates_physical ... ok
+test public_pipeline_never_deduplicates_different_bytes_after_compact_collision ... ok
+test gate_c3_detects_every_beneficial_exact_duplicate ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 13 tests
+test compact_hashes_match_the_frozen_abc_vector ... ok
+test full_hash_escalation_revalidates_the_compact_identity ... ok
+test empty_chunk_is_supported_without_synthetic_superfeatures ... ok
+test fingerprint_config_defaults_are_bounded_and_normative ... ok
+test batch_is_sorted_deterministically_and_escalates_only_compact_collisions ... ok
+test parallel_fingerprinting_observes_thread_safe_cancellation ... ok
+test paranoid_policy_retains_full_blake3_for_singletons ... ok
+test one_chunk_receives_every_compact_fingerprint_and_superfeature ... ok
+test batch_rejects_mismatched_lengths_duplicate_ids_and_resource_abuse ... ok
+test full_hash_escalation_is_bounded_and_cancellable ... ok
+test rolling_superfeatures_match_large_four_and_three_feature_vectors ... ok
+test parallelism_does_not_change_batch_output ... ok
+test streaming_matches_slice_and_rejects_short_or_trailing_input ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+
+
+running 27 tests
+test config_rejects_invalid_size_relations_and_resource_limits ... ok
+test chunk_ids_are_assigned_after_deterministic_tuple_sorting ... ok
+test coverage_validation_rejects_gaps_overlaps_zero_lengths_and_wrong_origin ... ok
+test chunk_offsets_fail_closed_on_u64_overflow ... ok
+test default_config_is_normative_and_valid ... ok
+test every_chunking_path_enforces_the_configured_logical_byte_limit ... ok
+test empty_microfile_draft_receives_a_stable_global_chunk_id ... ok
+test fastcdc_and_fixed_chunking_return_no_chunks_for_empty_inputs ... ok
+test fixed_high_entropy_chunking_handles_tail_and_exact_multiple ... ok
+test fixed_high_entropy_supports_the_normative_one_to_four_mib_edges ... ok
+test sorting_and_validation_passes_expose_cooperative_cancellation ... ok
+test streaming_fastcdc_checkpoints_each_underlying_read ... ok
+test streaming_fastcdc_propagates_io_errors ... ok
+test streaming_fastcdc_stops_reading_at_the_logical_byte_limit ... ok
+test fixed_chunking_preserves_coverage_for_arbitrary_lengths ... ok
+test structural_chunking_rejects_noncanonical_or_incomplete_boundaries ... ok
+test streaming_fastcdc_observes_cancellation_checkpoint ... ok
+test in_memory_and_fixed_paths_expose_cooperative_cancellation ... ok
+test max_chunks_is_enforced_before_unbounded_chunk_metadata_growth ... ok
+test streaming_fastcdc_matches_the_slice_implementation_exactly ... ok
+test structural_chunking_preserves_scanner_ends_and_subchunks_large_regions ... ok
+test fastcdc_is_deterministic_and_covers_the_complete_logical_range ... ok
+test structural_streaming_matches_slice_and_rejects_short_or_trailing_data ... ok
+test fastcdc_v2020_boundaries_match_the_frozen_pithos_vector ... ok
+test fastcdc_resynchronizes_after_a_prefix_insertion ... ok
+test fastcdc_never_creates_a_gap_for_generated_content ... ok
+test streaming_boundaries_do_not_depend_on_reader_batch_size ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.54s
+
+
+running 14 tests
+test duplicate_entry_ids_and_paths_fail_closed ... ok
+test empty_input_has_no_synthetic_pack_or_exclusion ... ok
+test eligibility_is_inclusive_at_64_kib_and_exclusions_are_explicit ... ok
+test max_chunks_limits_pack_count_before_returning_a_partial_plan ... ok
+test compact_metadata_validation_rejects_corrupt_columns_and_offsets ... ok
+test microfile_members_feed_global_logical_chunk_id_assignment ... ok
+test microfile_planning_exposes_cooperative_cancellation ... ok
+test public_validation_enforces_microfile_size_and_metadata_budgets ... ok
+test public_microfile_validation_exposes_cooperative_cancellation ... ok
+test grouping_signals_define_member_proximity_before_path_tie_breaking ... ok
+test target_size_splits_packs_and_offsets_restart_without_gaps ... ok
+test timestamp_delta_handles_the_full_i64_domain_without_overflow ... ok
+test zero_byte_files_are_preserved_with_canonical_metadata ... ok
+test planning_has_a_canonical_total_order_for_every_input_permutation ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+[stderr]
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.52s
+     Running unittests src\lib.rs (target\debug\deps\pithos_analysis-6ed6cc57195ea921.exe)
+     Running tests\exact_dedup.rs (target\debug\deps\exact_dedup-f2328901c778502b.exe)
+     Running tests\fingerprints.rs (target\debug\deps\fingerprints-72e129da84dcf3a3.exe)
+     Running tests\logical_chunking.rs (target\debug\deps\logical_chunking-4b42621ec71768f7.exe)
+proptest: FileFailurePersistence::SourceParallel set, but failed to find lib.rs or main.rs
+proptest: FileFailurePersistence::SourceParallel set, but failed to find lib.rs or main.rs
+     Running tests\micro_file_pack.rs (target\debug\deps\micro_file_pack-51572fdd9b23b25b.exe)

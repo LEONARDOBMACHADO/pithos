@@ -1,0 +1,5 @@
+name=09_fuzz_target_build
+command=cargo +nightly check --manifest-path fuzz/Cargo.toml --bin exact_dedup
+started_utc=2026-08-07T13:58:58.9380882Z
+ended_utc=2026-08-07T13:59:03.6139219Z
+exit_code=0

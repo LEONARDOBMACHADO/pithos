@@ -1,0 +1,4 @@
+[stderr]
+   Compiling pithos-testkit v0.1.0 (C:\Projetos\TESTE\crates\pithos-testkit)
+   Compiling pithos-cli v0.1.0 (C:\Projetos\TESTE\crates\pithos-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 29.77s

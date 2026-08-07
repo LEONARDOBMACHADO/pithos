@@ -1,0 +1,40 @@
+runner=gate-c3-windows-v4
+timestamp_utc=2026-08-07T13:57:31.0374292Z
+repo=C:\Projetos\TESTE
+powershell_version=5.1.26100.8875
+powershell_edition=Desktop
+branch=feat/phase3-exact-dedup
+commit=384c2ca9e1e57fde6bff58b2d75f26674a717585
+os=Microsoft Windows NT 10.0.26200.0
+is_64bit_os=True
+is_64bit_process=True
+gate_c3_windows_fuzz_sanitizer=none
+gate_c3_windows_fuzz_note=Functional libFuzzer run; MSVC AddressSanitizer is a separate hardening prerequisite.
+
+rustc --version --verbose:
+rustc 1.95.0 (59807616e 2026-04-14)
+binary: rustc
+commit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860
+commit-date: 2026-04-14
+host: x86_64-pc-windows-msvc
+release: 1.95.0
+LLVM version: 22.1.2
+
+cargo --version:
+cargo 1.95.0 (f2d3ce0bd 2026-03-21)
+
+cargo-fuzz --version:
+cargo-fuzz 0.13.2
+
+cargo-llvm-cov --version:
+cargo-llvm-cov 0.8.7
+
+rustup toolchain list:
+stable-x86_64-pc-windows-msvc (active, default)
+nightly-x86_64-pc-windows-msvc
+1.97.1-x86_64-pc-windows-msvc
+
+git status --short:
+?? docs/gates/GATE_A_EVIDENCE.md
+?? docs/gates/GATE_B_EVIDENCE.md
+?? docs/gates/evidence/gate-c3-20260807T135731Z/

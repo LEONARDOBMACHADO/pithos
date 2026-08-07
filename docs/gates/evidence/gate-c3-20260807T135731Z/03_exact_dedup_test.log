@@ -1,0 +1,11 @@
+[stdout]
+
+running 3 tests
+test cost_model_keeps_non_beneficial_duplicates_physical ... ok
+test public_pipeline_never_deduplicates_different_bytes_after_compact_collision ... ok
+test gate_c3_detects_every_beneficial_exact_duplicate ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+[stderr]
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.32s
+     Running tests\exact_dedup.rs (target\debug\deps\exact_dedup-f2328901c778502b.exe)
