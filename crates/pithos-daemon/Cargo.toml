@@ -12,7 +12,7 @@ path = "src/main.rs"
 [dependencies]
 pithos-core = { path = "../pithos-core" }
 pithos-agent-api = { path = "../pithos-agent-api" }
-pithos-engine = { path = "../pithos-engine" }
+pithos-engine = { package = "pithos-engine-next", path = "../pithos-engine-next" }
 tokio.workspace = true
 tracing.workspace = true
 serde.workspace = true
