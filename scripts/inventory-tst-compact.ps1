@@ -44,7 +44,8 @@ $rows = @(
     }
 )
 
-if ($rows.Count -gt 0) {
+$rowCount = @($rows).Length
+if ($rowCount -gt 0) {
     $rows | Export-Csv -LiteralPath $manifestPath -NoTypeInformation -Encoding UTF8
 } else {
     [System.IO.File]::WriteAllText(
@@ -54,18 +55,23 @@ if ($rows.Count -gt 0) {
     )
 }
 
-$count = $rows.Count
+$count = [int]$rowCount
 $totalBytes = if ($count -gt 0) {
     [int64](($rows | Measure-Object -Property bytes -Sum).Sum)
 } else {
     [int64]0
 }
-$averageBytes = if ($count -gt 0) { [double]$totalBytes / $count } else { 0 }
-$extensions = if ($count -gt 0) {
-    @($rows | Group-Object extension | Sort-Object Name)
-} else {
-    @()
-}
+$averageBytes = if ($count -gt 0) { [double]$totalBytes / $count } else { [double]0 }
+
+# Wrap the entire conditional expression. In Windows PowerShell 5.1 assigning
+# an empty @() from one branch can otherwise produce $null after pipeline
+# unrolling, and StrictMode then rejects `$extensions.Count`.
+$extensions = @(
+    if ($count -gt 0) {
+        $rows | Group-Object extension | Sort-Object Name
+    }
+)
+$extensionCount = [int]@($extensions).Length
 
 $summary = New-Object System.Collections.Generic.List[string]
 $summary.Add("corpus=$corpusPath")
@@ -73,15 +79,15 @@ $summary.Add("file_count=$count")
 $summary.Add("total_bytes=$totalBytes")
 $summary.Add("total_mib=$([math]::Round($totalBytes / 1MB, 3))")
 $summary.Add("average_mib=$([math]::Round($averageBytes / 1MB, 3))")
-$summary.Add("extension_count=$($extensions.Count)")
+$summary.Add("extension_count=$extensionCount")
 $summary.Add('')
 $summary.Add('extensions:')
-foreach ($group in $extensions) {
+foreach ($group in @($extensions)) {
     $extensionBytes = [int64](($group.Group | Measure-Object -Property bytes -Sum).Sum)
     $summary.Add("$($group.Name),count=$($group.Count),mib=$([math]::Round($extensionBytes / 1MB, 3))")
 }
 
-[System.IO.File]::WriteAllLines($summaryPath, $summary, $utf8)
+[System.IO.File]::WriteAllLines($summaryPath, [string[]]$summary.ToArray(), $utf8)
 
 Write-Host "Corpus inventory complete" -ForegroundColor Green
 Write-Host "Files: $count"
