@@ -1,0 +1,12 @@
+[package]
+name = "pithos-native-codec-v4"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+pithos-core = { path = "../pithos-core" }
+pithos-native-v3 = { package = "pithos-native-codec-v3", path = "../pithos-native-codec-v3" }
+serde_json.workspace = true
+zstd.workspace = true
