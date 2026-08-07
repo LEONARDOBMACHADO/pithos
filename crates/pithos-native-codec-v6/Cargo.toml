@@ -1,0 +1,12 @@
+[package]
+name = "pithos-native-codec-v6"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+pithos-core = { path = "../pithos-core" }
+pithos-native-v5 = { package = "pithos-native-codec-v5", path = "../pithos-native-codec-v5" }
+xxhash-rust.workspace = true
+zstd.workspace = true
