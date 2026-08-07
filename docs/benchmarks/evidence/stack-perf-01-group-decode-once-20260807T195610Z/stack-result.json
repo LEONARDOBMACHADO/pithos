@@ -1,0 +1,30 @@
+﻿[
+    {
+        "branch":  "perf/01-group-decode-once",
+        "commit":  "6db7f5bdf393e4b231959db453a0e0f9cebbfd8c",
+        "compressor":  "pithos",
+        "profile":  "archive-max",
+        "original_bytes":  499318122,
+        "archive_bytes":  88506478,
+        "savings_percent":  82.274531,
+        "compress_ms":  274034.214,
+        "verify_ms":  6441.844,
+        "decompress_ms":  7742.161,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    },
+    {
+        "branch":  "perf/01-group-decode-once",
+        "commit":  "6db7f5bdf393e4b231959db453a0e0f9cebbfd8c",
+        "compressor":  "7zip",
+        "profile":  "lzma2-mx9-solid",
+        "original_bytes":  499318122,
+        "archive_bytes":  86352019,
+        "savings_percent":  82.706011,
+        "compress_ms":  67902.444,
+        "verify_ms":  3691.154,
+        "decompress_ms":  3693.169,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    }
+]

@@ -1,0 +1,3 @@
+﻿"branch","commit","compressor","profile","original_bytes","archive_bytes","savings_percent","compress_ms","verify_ms","decompress_ms","tree_sha256","status"
+"perf/01-group-decode-once","6db7f5bdf393e4b231959db453a0e0f9cebbfd8c","pithos","archive-max","499318122","88506478","82.274531","274034.214","6441.844","7742.161","469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4","ok"
+"perf/01-group-decode-once","6db7f5bdf393e4b231959db453a0e0f9cebbfd8c","7zip","lzma2-mx9-solid","499318122","86352019","82.706011","67902.444","3691.154","3693.169","469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4","ok"
