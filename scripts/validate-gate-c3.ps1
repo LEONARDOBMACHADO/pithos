@@ -86,22 +86,22 @@ $summaryPath = Join-Path $evidenceDir 'SUMMARY.md'
 $summaryLines = New-Object System.Collections.Generic.List[string]
 $summaryLines.Add('# Gate C3 local validation')
 $summaryLines.Add('')
-$summaryLines.Add("- Timestamp UTC: `$timestamp`")
-$summaryLines.Add("- Branch: `$(git branch --show-current)`")
-$summaryLines.Add("- Commit: `$(git rev-parse HEAD)`")
+$summaryLines.Add("- Timestamp UTC: $timestamp")
+$summaryLines.Add("- Branch: $(git branch --show-current)")
+$summaryLines.Add("- Commit: $(git rev-parse HEAD)")
 $summaryLines.Add("- Result: **$(if ($failed.Count -eq 0) { 'PASS' } else { 'FAIL' })**")
 $summaryLines.Add('')
 $summaryLines.Add('| Check | Exit code | Log |')
 $summaryLines.Add('|---|---:|---|')
 foreach ($item in $summary) {
-    $summaryLines.Add("| $($item.Name) | $($item.ExitCode) | `$($item.Log)` |")
+    $summaryLines.Add("| $($item.Name) | $($item.ExitCode) | $($item.Log) |")
 }
 $summaryLines.Add('')
 if ($failed.Count -gt 0) {
     $summaryLines.Add('## Failures')
     $summaryLines.Add('')
     foreach ($item in $failed) {
-        $summaryLines.Add("- **$($item.Name)** — exit code `$($item.ExitCode)`; preserve the corresponding log unchanged.")
+        $summaryLines.Add("- **$($item.Name)** — exit code $($item.ExitCode); preserve the corresponding log unchanged.")
     }
 } else {
     $summaryLines.Add('No command failed.')
