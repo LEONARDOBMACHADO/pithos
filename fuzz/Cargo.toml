@@ -89,3 +89,10 @@ path = "fuzz_targets/fingerprints.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "exact_dedup"
+path = "fuzz_targets/exact_dedup.rs"
+test = false
+doc = false
+bench = false
