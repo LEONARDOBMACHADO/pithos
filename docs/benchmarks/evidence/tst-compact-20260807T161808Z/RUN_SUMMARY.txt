@@ -1,0 +1,13 @@
+timestamp_utc=2026-08-07T17:12:24.7174244Z
+commit=1d7246a5355a3734e8d2ca1b0dd765e4b114dadc
+branch=feat/phase3-exact-dedup
+inventory_exit=0
+corpus_file_count=31
+empty_corpus=False
+phasebench_exit=0
+codecbench_exit=0
+benchmark_exit=0
+summary_exit=0
+corpus=C:\Projetos\TESTE\tst_compact
+local_results=C:\Projetos\TESTE\tst_compact\results
+versioned_evidence=C:\Projetos\TESTE\docs\benchmarks\evidence\tst-compact-20260807T161808Z

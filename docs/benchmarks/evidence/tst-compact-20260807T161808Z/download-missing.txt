@@ -1,0 +1,2 @@
+format=log,target_mib=10,reason=no_fixture
+format=wasm,target_mib=10,reason=no_fixture

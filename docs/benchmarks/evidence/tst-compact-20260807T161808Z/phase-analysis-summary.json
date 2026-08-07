@@ -1,0 +1,17 @@
+{
+  "corpus": "C:\\Projetos\\TESTE\\tst_compact",
+  "file_count": 31,
+  "original_bytes": 499318122,
+  "chunk_count": 966,
+  "canonical_chunks": 537,
+  "referenced_chunks": 429,
+  "gross_duplicate_bytes": 282532142,
+  "reference_bytes": 6864,
+  "net_saved_bytes": 282525278,
+  "dedup_output_estimate_bytes": 216792844,
+  "dedup_savings_percent": 56.58221994193914,
+  "scan_ms": 217,
+  "chunking_ms": 299,
+  "fingerprint_ms": 3321,
+  "exact_dedup_ms": 170
+}
