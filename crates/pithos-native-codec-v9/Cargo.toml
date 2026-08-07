@@ -1,0 +1,13 @@
+[package]
+name = "pithos-native-codec-v9"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+pithos-core = { path = "../pithos-core" }
+pithos-native-v3 = { package = "pithos-native-codec-v3", path = "../pithos-native-codec-v3" }
+pithos-native-v5 = { package = "pithos-native-codec-v5", path = "../pithos-native-codec-v5" }
+pithos-native-v7 = { package = "pithos-native-codec-v7", path = "../pithos-native-codec-v7" }
+pithos-native-v8 = { package = "pithos-native-codec-v8", path = "../pithos-native-codec-v8" }
