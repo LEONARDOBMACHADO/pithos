@@ -167,7 +167,9 @@ pub fn pack_with_limits_and_control(
         max_groups: limits.max_entries.min(decode_defaults.max_groups),
         max_chunks: limits.max_entries.min(decode_defaults.max_chunks),
         max_original_bytes: limits.max_input_bytes,
-        max_metadata_bytes: limits.max_metadata_bytes.min(decode_defaults.max_metadata_bytes),
+        max_metadata_bytes: limits
+            .max_metadata_bytes
+            .min(decode_defaults.max_metadata_bytes),
         ..decode_defaults
     };
 
@@ -189,7 +191,8 @@ pub fn pack_with_limits_and_control(
             return Err(PithosError::MemoryLimit);
         }
         let members = group_members(&sources, plan)?;
-        let capacity = usize::try_from(plan.uncompressed_len).map_err(|_| PithosError::MemoryLimit)?;
+        let capacity =
+            usize::try_from(plan.uncompressed_len).map_err(|_| PithosError::MemoryLimit)?;
         let mut input = Vec::with_capacity(capacity);
         for source in members {
             input.extend_from_slice(&source.bytes);
@@ -305,9 +308,21 @@ pub fn pack_with_limits_and_control(
     }
 
     let mut sections = Vec::with_capacity(REQUIRED_COMPRESSED_SECTIONS as usize);
-    sections.push(write_section(&mut spool, SectionType::CodecRegistry, &registry_bytes)?);
-    sections.push(write_section(&mut spool, SectionType::EntryTable, &entry_bytes)?);
-    sections.push(write_section(&mut spool, SectionType::GroupTable, &group_bytes)?);
+    sections.push(write_section(
+        &mut spool,
+        SectionType::CodecRegistry,
+        &registry_bytes,
+    )?);
+    sections.push(write_section(
+        &mut spool,
+        SectionType::EntryTable,
+        &entry_bytes,
+    )?);
+    sections.push(write_section(
+        &mut spool,
+        SectionType::GroupTable,
+        &group_bytes,
+    )?);
     sections.push(SectionDirectoryRecord {
         section_type: SectionType::PayloadArea as u16,
         section_version: 1,
@@ -317,9 +332,21 @@ pub fn pack_with_limits_and_control(
         crc32c: payload_crc,
         reserved: 0,
     });
-    sections.push(write_section(&mut spool, SectionType::RestoreMap, &restore_bytes)?);
-    sections.push(write_section(&mut spool, SectionType::CentralIndex, &index_bytes)?);
-    sections.push(write_section(&mut spool, SectionType::IntegrityTree, &integrity_bytes)?);
+    sections.push(write_section(
+        &mut spool,
+        SectionType::RestoreMap,
+        &restore_bytes,
+    )?);
+    sections.push(write_section(
+        &mut spool,
+        SectionType::CentralIndex,
+        &index_bytes,
+    )?);
+    sections.push(write_section(
+        &mut spool,
+        SectionType::IntegrityTree,
+        &integrity_bytes,
+    )?);
     sections.sort_by_key(|section| section.section_type);
 
     let footer_offset = spool.stream_position()?;
@@ -705,8 +732,20 @@ mod tests {
     #[test]
     fn archive_max_candidates_are_actual_max_configs() {
         let candidates = profile_candidates(CompressionProfile::ArchiveMax);
-        assert!(candidates.iter().any(|c| c.codec == CodecId::Zstd && c.level == 19));
-        assert!(candidates.iter().any(|c| c.codec == CodecId::Brotli && c.level == 11));
-        assert!(candidates.iter().any(|c| c.codec == CodecId::Lzma2 && c.level == 9));
+        assert!(
+            candidates
+                .iter()
+                .any(|c| c.codec == CodecId::Zstd && c.level == 19)
+        );
+        assert!(
+            candidates
+                .iter()
+                .any(|c| c.codec == CodecId::Brotli && c.level == 11)
+        );
+        assert!(
+            candidates
+                .iter()
+                .any(|c| c.codec == CodecId::Lzma2 && c.level == 9)
+        );
     }
 }
