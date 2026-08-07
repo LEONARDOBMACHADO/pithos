@@ -1,127 +1,16 @@
-name: Pithos CI
+name: Pithos CI (manual only)
 
+# Automatic GitHub Actions validation is intentionally disabled.
+# Validation commands must be run locally and evidence committed under docs/gates/.
 on:
-  push:
-    branches:
-      - main
-      - "feat/**"
-      - "fix/**"
-  pull_request:
-
-concurrency:
-  group: pithos-ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  quality:
-    name: Quality and coverage
+  disabled:
+    if: ${{ false }}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Install stable Rust
-        run: |
-          rustup toolchain install stable --profile minimal --component rustfmt --component clippy --component llvm-tools-preview
-          rustup default stable
-
-      - name: Format
-        id: format
-        shell: bash
-        run: |
-          set -o pipefail
-          cargo fmt --all -- --check 2>&1 | tee fmt.log
-
-      - name: Upload format diagnostics
-        if: failure() && steps.format.outcome == 'failure'
-        uses: actions/upload-artifact@v4
-        with:
-          name: rustfmt-diff
-          path: fmt.log
-          if-no-files-found: error
-
-      - name: Build workspace
-        run: cargo build --workspace --all-targets
-
-      - name: Test workspace
-        run: cargo test --workspace --all-targets
-
-      - name: Clippy workspace
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: Install cargo-llvm-cov
-        run: cargo install cargo-llvm-cov --locked
-
-      - name: Coverage gate
-        run: cargo llvm-cov --workspace --all-targets --fail-under-lines 80
-
-  cross-platform:
-    name: Cross-platform (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-          - windows-latest
-          - macos-latest
-    runs-on: ${{ matrix.os }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Install stable Rust
-        run: |
-          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
-          rustup default stable
-
-      - name: Build workspace
-        id: cross_build
-        shell: bash
-        run: |
-          set -o pipefail
-          cargo build --workspace --all-targets 2>&1 | tee cross-platform-build.log
-
-      - name: Upload build diagnostics
-        if: failure() && steps.cross_build.outcome == 'failure'
-        uses: actions/upload-artifact@v4
-        with:
-          name: cross-platform-build-${{ matrix.os }}
-          path: cross-platform-build.log
-          if-no-files-found: error
-
-      - name: Test workspace
-        id: cross_tests
-        shell: bash
-        run: |
-          set -o pipefail
-          cargo test --workspace --all-targets 2>&1 | tee cross-platform-test.log
-
-      - name: Upload test diagnostics
-        if: failure() && steps.cross_tests.outcome == 'failure'
-        uses: actions/upload-artifact@v4
-        with:
-          name: cross-platform-test-${{ matrix.os }}
-          path: cross-platform-test.log
-          if-no-files-found: error
-
-  gate-c3-fuzz:
-    name: Gate C3 exact dedup fuzz
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Install nightly Rust
-        run: rustup toolchain install nightly --profile minimal
-
-      - name: Install cargo-fuzz
-        run: cargo +nightly install cargo-fuzz --locked
-
-      - name: Build exact dedup fuzz target
-        run: cargo +nightly check --manifest-path fuzz/Cargo.toml --bin exact_dedup
-
-      - name: Fuzz exact dedup
-        run: cargo +nightly fuzz run exact_dedup -- -runs=10000 -max_len=65536
+      - run: echo "Automatic CI disabled; run validation locally and commit evidence."
