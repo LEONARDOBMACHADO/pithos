@@ -11,7 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 pithos-core = { path = "../pithos-core" }
-pithos-engine = { path = "../pithos-engine" }
+pithos-engine = { package = "pithos-engine-next", path = "../pithos-engine-next" }
 pithos-agent-api = { path = "../pithos-agent-api" }
 pithos-daemon = { path = "../pithos-daemon" }
 clap.workspace = true
