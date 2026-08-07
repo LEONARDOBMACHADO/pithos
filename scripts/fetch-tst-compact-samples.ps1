@@ -16,42 +16,71 @@ New-Item -ItemType Directory -Force -Path $corpusPath | Out-Null
 $resultsPath = Join-Path $corpusPath 'results'
 New-Item -ItemType Directory -Force -Path $resultsPath | Out-Null
 
-# SampleFile.com documents /samples/api/files?format=<ext> as returning
-# fixture metadata with name, size_bytes, sha256 and download_url. The response
-# wrapper has changed over time, so this runner accepts direct arrays and common
-# wrapper properties instead of binding the raw response directly to a mandatory
-# collection parameter.
+# SampleFile.com documents both /samples/api/files?format=<ext> and stable
+# per-format manifest.json endpoints. The generic API is preferred; manifests
+# are the deterministic fallback. A final random endpoint fallback keeps a
+# format usable if its listing/manifest route changes temporarily.
 $targets = @(
-    @{ Format='txt';   Folder='text';       MiB=10 },
-    @{ Format='csv';   Folder='structured'; MiB=25 },
-    @{ Format='json';  Folder='structured'; MiB=25 },
-    @{ Format='xml';   Folder='structured'; MiB=25 },
-    @{ Format='sql';   Folder='structured'; MiB=25 },
-    @{ Format='log';   Folder='text';       MiB=10 },
-    @{ Format='pdf';   Folder='documents';  MiB=10 },
-    @{ Format='pdf';   Folder='documents';  MiB=25 },
-    @{ Format='docx';  Folder='documents';  MiB=10 },
-    @{ Format='xlsx';  Folder='documents';  MiB=10 },
-    @{ Format='pptx';  Folder='documents';  MiB=25 },
-    @{ Format='bmp';   Folder='images';     MiB=25 },
-    @{ Format='tiff';  Folder='images';     MiB=25 },
-    @{ Format='png';   Folder='images';     MiB=10 },
-    @{ Format='png';   Folder='images';     MiB=25 },
-    @{ Format='jpg';   Folder='images';     MiB=25 },
-    @{ Format='webp';  Folder='images';     MiB=25 },
-    @{ Format='wav';   Folder='audio';      MiB=50 },
-    @{ Format='flac';  Folder='audio';      MiB=25 },
-    @{ Format='mp3';   Folder='audio';      MiB=25 },
-    @{ Format='mp4';   Folder='video';      MiB=100 },
-    @{ Format='mkv';   Folder='video';      MiB=50 },
-    @{ Format='sqlite';Folder='databases';  MiB=25 },
-    @{ Format='tar';   Folder='archives';   MiB=50 },
-    @{ Format='zip';   Folder='archives';   MiB=50 },
-    @{ Format='7z';    Folder='archives';   MiB=50 },
-    @{ Format='rar';   Folder='archives';   MiB=50 },
-    @{ Format='gz';    Folder='archives';   MiB=25 },
-    @{ Format='wasm';  Folder='binaries';   MiB=10 }
+    @{ Format='txt';    Folder='text';       MiB=10 },
+    @{ Format='csv';    Folder='structured'; MiB=25 },
+    @{ Format='json';   Folder='structured'; MiB=25 },
+    @{ Format='xml';    Folder='structured'; MiB=25 },
+    @{ Format='sql';    Folder='structured'; MiB=25 },
+    @{ Format='log';    Folder='text';       MiB=10 },
+    @{ Format='pdf';    Folder='documents';  MiB=10 },
+    @{ Format='pdf';    Folder='documents';  MiB=25 },
+    @{ Format='docx';   Folder='documents';  MiB=10 },
+    @{ Format='xlsx';   Folder='documents';  MiB=10 },
+    @{ Format='pptx';   Folder='documents';  MiB=25 },
+    @{ Format='bmp';    Folder='images';     MiB=25 },
+    @{ Format='tiff';   Folder='images';     MiB=25 },
+    @{ Format='png';    Folder='images';     MiB=10 },
+    @{ Format='png';    Folder='images';     MiB=25 },
+    @{ Format='jpeg';   Folder='images';     MiB=25 },
+    @{ Format='webp';   Folder='images';     MiB=25 },
+    @{ Format='wav';    Folder='audio';      MiB=50 },
+    @{ Format='flac';   Folder='audio';      MiB=25 },
+    @{ Format='mp3';    Folder='audio';      MiB=25 },
+    @{ Format='mp4';    Folder='video';      MiB=100 },
+    @{ Format='mkv';    Folder='video';      MiB=50 },
+    @{ Format='sqlite'; Folder='databases';  MiB=25 },
+    @{ Format='tar';    Folder='archives';   MiB=50 },
+    @{ Format='zip';    Folder='archives';   MiB=50 },
+    @{ Format='7z';     Folder='archives';   MiB=50 },
+    @{ Format='rar';    Folder='archives';   MiB=50 },
+    @{ Format='gz';     Folder='archives';   MiB=25 },
+    @{ Format='wasm';   Folder='binaries';   MiB=10 }
 )
+
+$manifestCategories = @{
+    txt    = @('document', 'data')
+    csv    = @('data', 'document')
+    json   = @('data', 'document', 'code', 'log')
+    xml    = @('data', 'document', 'code')
+    sql    = @('data', 'code')
+    log    = @('log', 'data')
+    pdf    = @('document')
+    docx   = @('document')
+    xlsx   = @('document')
+    pptx   = @('document')
+    bmp    = @('image')
+    tiff   = @('image')
+    png    = @('image')
+    jpeg   = @('image')
+    webp   = @('image')
+    wav    = @('audio')
+    flac   = @('audio')
+    mp3    = @('audio')
+    mp4    = @('video')
+    mkv    = @('video')
+    sqlite = @('data')
+    tar    = @('archive')
+    zip    = @('archive')
+    '7z'   = @('archive')
+    rar    = @('archive')
+    gz     = @('archive')
+    wasm   = @('code')
+}
 
 foreach ($folder in ($targets.Folder | Sort-Object -Unique)) {
     New-Item -ItemType Directory -Force -Path (Join-Path $corpusPath $folder) | Out-Null
@@ -65,33 +94,65 @@ $missingRows = New-Object System.Collections.Generic.List[string]
 function Test-FixtureShape {
     param([AllowNull()][object]$Value)
     if ($null -eq $Value) { return $false }
-    return ($null -ne $Value.PSObject.Properties['name']) -and
-        ($null -ne $Value.PSObject.Properties['size_bytes']) -and
-        ($null -ne $Value.PSObject.Properties['sha256']) -and
-        ($null -ne $Value.PSObject.Properties['download_url'])
+    if (($null -eq $Value.PSObject.Properties['name']) -or
+        ($null -eq $Value.PSObject.Properties['size_bytes']) -or
+        ($null -eq $Value.PSObject.Properties['sha256']) -or
+        ($null -eq $Value.PSObject.Properties['download_url'])) {
+        return $false
+    }
+    return (-not [string]::IsNullOrWhiteSpace([string]$Value.name)) -and
+        ([int64]$Value.size_bytes -gt 0) -and
+        (-not [string]::IsNullOrWhiteSpace([string]$Value.sha256)) -and
+        (-not [string]::IsNullOrWhiteSpace([string]$Value.download_url))
 }
 
 function Expand-FixtureResponse {
     param([AllowNull()][object]$Response)
 
-    if ($null -eq $Response) { return @() }
+    if ($null -eq $Response) { return }
     if ($Response -is [System.Array]) {
-        return @($Response | Where-Object { Test-FixtureShape $_ })
+        foreach ($item in $Response) {
+            if (Test-FixtureShape $item) { Write-Output $item }
+        }
+        return
     }
     if (Test-FixtureShape $Response) {
-        return @($Response)
+        Write-Output $Response
+        return
     }
 
     foreach ($propertyName in @('files', 'results', 'items', 'fixtures', 'data')) {
         $property = $Response.PSObject.Properties[$propertyName]
         if ($null -ne $property) {
             $expanded = @(Expand-FixtureResponse -Response $property.Value)
-            if ($expanded.Count -gt 0) {
-                return $expanded
+            if (@($expanded).Length -gt 0) {
+                Write-Output $expanded
+                return
             }
         }
     }
-    return @()
+}
+
+function Get-ManifestItems {
+    param([Parameter(Mandatory=$true)][string]$Format)
+
+    if (-not $manifestCategories.ContainsKey($Format)) { return }
+    foreach ($category in @($manifestCategories[$Format])) {
+        $manifestUri = "https://samplefile.com/samples/$category/$Format/manifest.json"
+        try {
+            $manifest = Invoke-RestMethod -Uri $manifestUri -Method Get -UseBasicParsing
+            $items = @(Expand-FixtureResponse -Response $manifest)
+            if (@($items).Length -gt 0) {
+                Write-Host "  manifest fallback: $manifestUri"
+                Write-Output $items
+                return
+            }
+        }
+        catch {
+            # Category candidates are intentionally speculative fallbacks. A 404
+            # here is not itself a failed corpus acquisition.
+        }
+    }
 }
 
 function Get-ApiItems {
@@ -101,41 +162,35 @@ function Get-ApiItems {
     try {
         $response = Invoke-RestMethod -Uri $filesUri -Method Get -UseBasicParsing
         $items = @(Expand-FixtureResponse -Response $response)
-        if ($items.Count -gt 0) {
-            return $items
+        if (@($items).Length -gt 0) {
+            Write-Output $items
+            return
         }
-        Write-Warning "API returned no fixture list for .$Format; trying random fallback"
+        Write-Warning "Files API returned no usable fixtures for .$Format; trying manifest"
     }
     catch {
-        Write-Warning "Files API failed for .$Format : $($_.Exception.Message); trying random fallback"
+        Write-Warning "Files API failed for .$Format : $($_.Exception.Message); trying manifest"
+    }
+
+    $manifestItems = @(Get-ManifestItems -Format $Format)
+    if (@($manifestItems).Length -gt 0) {
+        Write-Output $manifestItems
+        return
     }
 
     $randomUri = "https://samplefile.com/samples/api/random?format=$Format"
     try {
         $randomResponse = Invoke-RestMethod -Uri $randomUri -Method Get -UseBasicParsing
-        return @(Expand-FixtureResponse -Response $randomResponse)
+        $randomItems = @(Expand-FixtureResponse -Response $randomResponse)
+        if (@($randomItems).Length -gt 0) {
+            Write-Warning "Using random fallback for .$Format because list/manifest were unavailable"
+            Write-Output $randomItems
+            return
+        }
     }
     catch {
         Write-Warning "Random API failed for .$Format : $($_.Exception.Message)"
-        return @()
     }
-}
-
-function Select-ClosestFixture {
-    param(
-        [AllowNull()][AllowEmptyCollection()][object[]]$Items = @(),
-        [Parameter(Mandatory=$true)][long]$TargetBytes,
-        [Parameter(Mandatory=$true)][System.Collections.Generic.HashSet[string]]$AlreadyUsed
-    )
-
-    $normalizedItems = @($Items | Where-Object { $null -ne $_ })
-    if ($normalizedItems.Count -eq 0) { return $null }
-
-    $eligible = @($normalizedItems | Where-Object {
-        (Test-FixtureShape $_) -and -not $AlreadyUsed.Contains([string]$_.name)
-    })
-    if ($eligible.Count -eq 0) { return $null }
-    return @($eligible | Sort-Object { [math]::Abs(([double]$_.size_bytes) - $TargetBytes) })[0]
 }
 
 foreach ($target in $targets) {
@@ -146,13 +201,26 @@ foreach ($target in $targets) {
     }
     $used = $selectedByFormat[$format]
     Write-Host "Selecting .$format near $($target.MiB) MiB..." -ForegroundColor Cyan
+
+    # Keep the empty-collection branch in this scope. Windows PowerShell 5.1 can
+    # reject an empty array while binding it to another advanced-function array
+    # parameter even when AllowEmptyCollection is present.
     $items = @(Get-ApiItems -Format $format)
-    $fixture = Select-ClosestFixture -Items $items -TargetBytes $targetBytes -AlreadyUsed $used
-    if ($null -eq $fixture) {
+    if (@($items).Length -eq 0) {
         $missingRows.Add("format=$format,target_mib=$($target.MiB),reason=no_fixture")
         Write-Warning "No usable fixture returned for .$format"
         continue
     }
+
+    $eligible = @($items | Where-Object {
+        (Test-FixtureShape $_) -and -not $used.Contains([string]$_.name)
+    })
+    if (@($eligible).Length -eq 0) {
+        $missingRows.Add("format=$format,target_mib=$($target.MiB),reason=no_unused_fixture")
+        Write-Warning "No unused fixture remains for .$format"
+        continue
+    }
+    $fixture = @($eligible | Sort-Object { [math]::Abs(([double]$_.size_bytes) - $targetBytes) })[0]
 
     [void]$used.Add([string]$fixture.name)
     $folderPath = Join-Path $corpusPath ([string]$target.Folder)
@@ -200,7 +268,7 @@ foreach ($target in $targets) {
         actual_mib = [math]::Round($actualBytes / 1MB, 3)
         sha256 = $expectedHash
         source_url = $downloadUrl
-        source_description = 'SampleFile.com verified fixture'
+        source_description = 'SampleFile.com SHA-256 verified fixture'
     })
 }
 
@@ -218,7 +286,7 @@ if (-not $SkipDuplicates) {
 
     foreach ($control in $controlPatterns) {
         $candidate = @($downloadedFiles | Where-Object { $control.Extensions -contains $_.Extension.ToLowerInvariant() } | Sort-Object Length -Descending | Select-Object -First 1)
-        if ($candidate.Count -eq 0) {
+        if (@($candidate).Length -eq 0) {
             $missingRows.Add("duplicate_control=$($control.Label),reason=no_source")
             continue
         }
@@ -252,7 +320,7 @@ if ($sourceRows.Count -gt 0) {
 }
 
 $missingPath = Join-Path $resultsPath 'download-missing.txt'
-[System.IO.File]::WriteAllLines($missingPath, $missingRows, (New-Object System.Text.UTF8Encoding -ArgumentList $false))
+[System.IO.File]::WriteAllLines($missingPath, [string[]]$missingRows.ToArray(), (New-Object System.Text.UTF8Encoding -ArgumentList $false))
 
 Write-Host "`nDownload pass complete." -ForegroundColor Green
 Write-Host "Registered fixtures: $($sourceRows.Count)"
