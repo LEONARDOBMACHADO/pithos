@@ -1,0 +1,15 @@
+[package]
+name = "pithos-native-codec"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+pithos-core = { path = "../pithos-core" }
+blake3.workspace = true
+zstd.workspace = true
+fastcdc.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
