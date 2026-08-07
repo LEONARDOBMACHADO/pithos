@@ -195,7 +195,9 @@ where
     for pair in ordered.windows(2) {
         checkpoint()?;
         if pair[0].chunk.chunk_id == pair[1].chunk.chunk_id {
-            return Err(PithosError::InvalidMetadata("duplicate exact dedup chunk ID"));
+            return Err(PithosError::InvalidMetadata(
+                "duplicate exact dedup chunk ID",
+            ));
         }
     }
 
@@ -571,7 +573,9 @@ where
         }
         if record.is_reference() {
             let canonical_index = ordered_inputs
-                .binary_search_by_key(&record.canonical_chunk_id, |candidate| candidate.chunk.chunk_id)
+                .binary_search_by_key(&record.canonical_chunk_id, |candidate| {
+                    candidate.chunk.chunk_id
+                })
                 .map_err(|_| PithosError::InvalidMetadata("exact dedup canonical target"))?;
             let canonical = &ordered_inputs[canonical_index];
             if canonical_key(canonical) >= canonical_key(input)
@@ -605,7 +609,9 @@ where
                 || record.reference_cost_bytes != 0
                 || record.net_saved_bytes != 0
             {
-                return Err(PithosError::InvalidMetadata("invalid canonical dedup record"));
+                return Err(PithosError::InvalidMetadata(
+                    "invalid canonical dedup record",
+                ));
             }
             canonical_chunks = canonical_chunks
                 .checked_add(1)
@@ -839,7 +845,9 @@ mod tests {
         ];
         assert!(matches!(
             exact_dedup(&inputs),
-            Err(PithosError::InvalidMetadata("duplicate exact dedup chunk ID"))
+            Err(PithosError::InvalidMetadata(
+                "duplicate exact dedup chunk ID"
+            ))
         ));
 
         let one_chunk = [DedupInput {
