@@ -2,13 +2,14 @@
 
 Pithos é um mecanismo de arquivamento e compactação em Rust, orientado tanto a
 uso humano por CLI quanto a automações e agentes por uma API local. O projeto
-define o contêiner PAF com extensão pública **`.pts`**, preserva paths e links de
+define o contêiner PAF com extensão pública **`.phs`**, preserva paths e links de
 forma portável e prioriza determinismo, integridade verificável, limites de
 recursos e publicação atômica dos resultados.
 
-`.pithos` é mantida apenas como extensão legada de leitura durante a transição.
-O formato binário continua sendo identificado pelo próprio PAF, não pela extensão
-do nome do arquivo.
+`.pithos` permanece como extensão legada de leitura. `.pts`, considerada durante
+o desenvolvimento, também continua legível, mas não é usada como associação
+pública porque já colide com formatos existentes. O formato binário é identificado
+pelo próprio PAF, não pela extensão do nome do arquivo.
 
 O formato evolui a partir de um baseline RAW/STORE auditável para um portfólio
 de codecs e otimizações estruturais sem sacrificar restauração byte-exact ou
@@ -24,23 +25,23 @@ tornar o parser vulnerável a arquivos malformados.
 - permitir integração com agentes por JSON-RPC estrito, jobs persistentes,
   eventos, cancelamento, quotas e retomada de sessão;
 - medir continuamente razão de compactação, custo temporal e contribuição das
-  fases já implementadas por meio do harness de benchmark local.
+  fases e codecs já implementados por meio do harness de benchmark local.
 
 ## Estado e escopo atual
 
 | Área | Estado |
 |---|---|
 | PAF 0.1-draft RAW/STORE | Implementado e testado |
-| Extensão pública `.pts` | Implementada; `.pithos` permanece legada |
+| Extensão pública `.phs` | Implementada; `.pithos` legado e `.pts` provisória continuam legíveis |
 | CLI `pack`, `unpack`, `list`, `inspect`, `extract`, `verify`, `capabilities` | Implementado em `standalone` e `daemon` |
-| Naming automático no `pack` | 1 input → `<nome>.pts`; múltiplos → `files.pts` |
+| Naming automático no `pack` | 1 input → `<nome>.phs`; múltiplos → `files.phs` |
 | Agent API local com 12 métodos | Implementada |
 | Jobs persistentes, idempotência, eventos, prioridades, quotas e recovery | Implementados |
 | Zstandard, Brotli, LZMA2, seleção determinística e solid groups | Implementados e testados |
 | Logical chunking (FastCDC, fixed, structural e MicroFilePack) | Implementado e testado |
 | Fingerprints (XXH3, BLAKE3, CRC32C e superfeatures) | Implementados e testados |
 | Exact dedup format-neutral | Implementado; fechamento do Gate C3 depende do fuzz ASan externo |
-| Telemetria e benchmark inicial | Implementados antecipadamente para medir a evolução por fase |
+| Telemetria e benchmarks iniciais | Implementados antecipadamente para medir evolução por fase e codec |
 | Similarity, clustering, reordering, transforms, recompression, viewer e mount | Fases posteriores |
 
 Os perfis públicos de empacotamento são:
@@ -82,8 +83,9 @@ Agent API JSON, o último perfil é escrito `archive_max`; a CLI e a resposta de
   determinístico e rejeita referências sem ganho líquido;
 - exact dedup permanece format-neutral até a integração física da `ChunkTable`;
   hashes nunca autorizam compartilhamento físico sem a comparação exata;
-- o benchmark local separa resultados por arquivo e `combined-all` e registra
-  tamanho, ratio, savings, pack/verify/unpack e a sonda de Fase 3 em JSONL/CSV.
+- o benchmark local separa resultados por arquivo e `combined-all`, mede os
+  quatro codecs diretamente e registra tamanho, ratio, savings, tempos e a sonda
+  de Fase 3 em JSONL/CSV/Markdown.
 
 O usuário do sistema operacional é a fronteira de segurança do daemon. O
 `path_scope` restringe clientes e automações a raízes canonicalizadas, mas não é
@@ -119,46 +121,46 @@ cargo llvm-cov --workspace --all-targets --fail-under-lines 80
 ## Uso standalone
 
 Empacotar um único arquivo sem informar output cria automaticamente
-`<nome-original>.pts`:
+`<nome-original>.phs`:
 
 ```text
 cargo run -p pithos-cli --bin pithos -- pack ./relatorio.pdf --profile balanced
-# saída: ./relatorio.pdf.pts
+# saída: ./relatorio.pdf.phs
 ```
 
-Empacotar uma árvore cria `<nome-da-pasta>.pts`:
+Empacotar uma árvore cria `<nome-da-pasta>.phs`:
 
 ```text
 cargo run -p pithos-cli --bin pithos -- pack ./dados --profile balanced
-# saída: ./dados.pts
+# saída: ./dados.phs
 ```
 
-Com múltiplas entradas o nome padrão é `files.pts`:
+Com múltiplas entradas o nome padrão é `files.phs`:
 
 ```text
 cargo run -p pithos-cli --bin pithos -- pack ./a.txt ./b.bin ./foto.png --profile balanced
-# saída: ./files.pts
+# saída: ./files.phs
 ```
 
 O nome continua podendo ser controlado explicitamente:
 
 ```text
-cargo run -p pithos-cli --bin pithos -- pack ./dados --output ./backup.pts --profile archive-max
+cargo run -p pithos-cli --bin pithos -- pack ./dados --output ./backup.phs --profile archive-max
 ```
 
 Listar e verificar sem restaurar:
 
 ```text
-cargo run -p pithos-cli --bin pithos -- list ./backup.pts
-cargo run -p pithos-cli --bin pithos -- verify ./backup.pts
+cargo run -p pithos-cli --bin pithos -- list ./backup.phs
+cargo run -p pithos-cli --bin pithos -- verify ./backup.phs
 ```
 
 Restaurar todo o archive ou uma única entrada:
 
 ```text
-cargo run -p pithos-cli --bin pithos -- unpack ./backup.pts --output ./restaurado
+cargo run -p pithos-cli --bin pithos -- unpack ./backup.phs --output ./restaurado
 
-cargo run -p pithos-cli --bin pithos -- extract ./backup.pts caminho/no/archive.txt --output ./selecionado
+cargo run -p pithos-cli --bin pithos -- extract ./backup.phs caminho/no/archive.txt --output ./selecionado
 ```
 
 Todos os comandos aceitam `--output-format human|json`. O modo padrão é
@@ -168,6 +170,12 @@ Todos os comandos aceitam `--output-format human|json`. O modo padrão é
 
 O corpus local padrão fica em `tst_compact/` e não é versionado. A especificação
 do corpus está em [`docs/benchmarks/TST_COMPACT_CORPUS.md`](docs/benchmarks/TST_COMPACT_CORPUS.md).
+
+Baixar e validar o corpus inicial:
+
+```text
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\fetch-tst-compact-samples.ps1
+```
 
 Inventariar os arquivos e gerar SHA-256:
 
@@ -181,6 +189,12 @@ Medir somente a análise já implementada da Fase 3:
 cargo run --release -p pithos-bench --bin pithos-phasebench -- --corpus ./tst_compact
 ```
 
+Medir STORE, Zstd, Brotli e LZMA2 diretamente por arquivo:
+
+```text
+cargo run --release -p pithos-bench --bin pithos-codecbench -- --corpus ./tst_compact
+```
+
 Executar a bateria completa, incluindo comparadores externos encontrados:
 
 ```text
@@ -188,15 +202,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-tst-compact-be
 ```
 
 A bateria produz resultados individuais e combinados para Pithos `balanced` e
-`archive-max`. 7-Zip, WinRAR e WinZip entram automaticamente quando suas CLIs
-estiverem disponíveis. Os artefatos grandes ficam em `tst_compact/results/work/`;
-somente manifesto, métricas e relatórios pequenos são copiados para
-`docs/benchmarks/evidence/`.
+`archive-max`, além do probe por codec e da análise de Fase 3. 7-Zip, WinRAR e
+WinZip entram automaticamente quando suas CLIs estiverem disponíveis. Os
+artefatos grandes ficam em `tst_compact/results/work/`; somente manifesto,
+métricas e relatórios pequenos são copiados para `docs/benchmarks/evidence/`.
 
-A sonda da Fase 3 mede atualmente scan, FastCDC, fingerprints e exact dedup. O
+A sonda da Fase 3 mede scan, FastCDC, fingerprints e exact dedup. O
 `net_saved_bytes` de dedup é ganho potencial enquanto a `ChunkTable` ainda não
 estiver integrada ao PAF; depois dessa integração, o mesmo corpus será reutilizado
-para medir a economia física efetiva do `.pts`.
+para medir a economia física efetiva do `.phs`.
 
 ## Uso com `pithosd`
 
@@ -209,7 +223,7 @@ cargo run -p pithos-daemon --bin pithosd -- --state-dir ./.pithos-state --allow-
 Em outro terminal, use a mesma state directory e selecione o modo daemon:
 
 ```text
-cargo run -p pithos-cli --bin pithos -- --mode daemon --daemon-state-dir ./.pithos-state pack ./dados --output ./backup.pts --profile balanced
+cargo run -p pithos-cli --bin pithos -- --mode daemon --daemon-state-dir ./.pithos-state pack ./dados --output ./backup.phs --profile balanced
 ```
 
 O transporte é Named Pipe no Windows e Unix Domain Socket no Unix. Não existe
@@ -231,7 +245,7 @@ retoma a sessão após reconexões de transporte.
 | `pithos-daemon` | IPC, sessões, scheduler, jobs e persistência |
 | `pithos-cli` | interface de linha de comando e cliente do daemon |
 | `pithos-telemetry` | contrato estável de métricas e JSONL por operação/fase |
-| `pithos-bench` | benchmark Pithos, sonda de Fase 3 e comparadores externos |
+| `pithos-bench` | benchmark Pithos, probe por codec, sonda de Fase 3 e comparadores externos |
 | `pithos-testkit` | corpus determinístico e testes de integração |
 
 Os demais crates do workspace reservam fronteiras para transforms, recompression,
@@ -251,7 +265,7 @@ viewer e mount, que serão preenchidas nas fases correspondentes.
 - [`docs/exact-dedup.md`](docs/exact-dedup.md): exact dedup, colisões, custo,
   determinismo e fronteira para a futura `ChunkTable`;
 - [`docs/benchmarks/TST_COMPACT_CORPUS.md`](docs/benchmarks/TST_COMPACT_CORPUS.md):
-  corpus local, tamanhos, formatos, naming `.pts` e execução dos benchmarks;
+  corpus local, tamanhos, formatos, naming `.phs` e execução dos benchmarks;
 - [`docs/adrs/ADRS.md`](docs/adrs/ADRS.md): decisões arquiteturais;
 - [`docs/gates/GATE_C3_EXACT_DEDUP_EVIDENCE.md`](docs/gates/GATE_C3_EXACT_DEDUP_EVIDENCE.md):
   registro reproduzível da validação externa do Gate C3;
