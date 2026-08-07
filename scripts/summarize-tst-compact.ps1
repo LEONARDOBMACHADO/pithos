@@ -10,6 +10,7 @@ $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Set-Location $repo
 $resultsPath = if ([System.IO.Path]::IsPathRooted($Results)) { $Results } else { Join-Path $repo $Results }
 $csvPath = Join-Path $resultsPath 'benchmark.csv'
+$codecPath = Join-Path $resultsPath 'codec-benchmark.csv'
 $phasePath = Join-Path $resultsPath 'phase-analysis-summary.json'
 $outPath = Join-Path $resultsPath 'benchmark-summary.md'
 
@@ -64,6 +65,34 @@ if ($wins.Count -eq 0) {
     foreach ($item in $sortedWins) {
         $lines.Add("| $($item.Name) | $($item.Value) |")
     }
+}
+$lines.Add('')
+
+$lines.Add('## Pithos codec contribution probe')
+$lines.Add('')
+if (Test-Path -LiteralPath $codecPath -PathType Leaf) {
+    $codecRows = @(Import-Csv -LiteralPath $codecPath | Where-Object { $_.roundtrip_ok -eq 'true' -or $_.roundtrip_ok -eq 'True' })
+    $codecWins = @{}
+    foreach ($fileGroup in ($codecRows | Group-Object relative_path)) {
+        $winner = @($fileGroup.Group | Sort-Object { [int64]$_.output_bytes })[0]
+        if (-not $codecWins.ContainsKey($winner.codec)) { $codecWins[$winner.codec] = 0 }
+        $codecWins[$winner.codec]++
+    }
+    $lines.Add('| Codec | Files | Size wins | Aggregate savings % | Encode total s | Decode total s |')
+    $lines.Add('|---|---:|---:|---:|---:|---:|')
+    foreach ($codecGroup in ($codecRows | Group-Object codec | Sort-Object Name)) {
+        $totalInput = [double](($codecGroup.Group | Measure-Object -Property input_bytes -Sum).Sum)
+        $totalOutput = [double](($codecGroup.Group | Measure-Object -Property output_bytes -Sum).Sum)
+        $totalEncodeMs = [double](($codecGroup.Group | Measure-Object -Property encode_ms -Sum).Sum)
+        $totalDecodeMs = [double](($codecGroup.Group | Measure-Object -Property decode_ms -Sum).Sum)
+        $saving = if ($totalInput -eq 0) { 0 } else { [math]::Round((1 - ($totalOutput / $totalInput)) * 100, 4) }
+        $winCount = if ($codecWins.ContainsKey($codecGroup.Name)) { $codecWins[$codecGroup.Name] } else { 0 }
+        $lines.Add("| $($codecGroup.Name) | $($codecGroup.Count) | $winCount | $saving | $([math]::Round($totalEncodeMs / 1000, 3)) | $([math]::Round($totalDecodeMs / 1000, 3)) |")
+    }
+    $lines.Add('')
+    $lines.Add('This probe runs every mandatory codec directly on every eligible file and verifies byte-exact decode. It isolates codec cost/benefit from grouping and other Pithos stages.')
+} else {
+    $lines.Add('Codec benchmark was not produced.')
 }
 $lines.Add('')
 
