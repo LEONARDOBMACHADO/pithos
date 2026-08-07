@@ -14,6 +14,7 @@ members = [
     "crates/pithos-native-codec-v3",
     "crates/pithos-native-codec-v4",
     "crates/pithos-native-codec-v5",
+    "crates/pithos-native-codec-v6",
     "crates/pithos-engine",
     "crates/pithos-engine-next",
     "crates/pithos-agent-api",
