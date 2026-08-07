@@ -1,0 +1,3 @@
+﻿"branch","commit","compressor","profile","original_bytes","archive_bytes","savings_percent","compress_ms","verify_ms","decompress_ms","tree_sha256","status"
+"feat/10-native-nested-deflate","b0bdeb741956f8c6bdb46fe65f48faf93bc5a1bc","pithos","archive-max","499318122","89024107","82.170864","1707748.723","961.765","18758.209","469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4","ok"
+"feat/10-native-nested-deflate","b0bdeb741956f8c6bdb46fe65f48faf93bc5a1bc","7zip","lzma2-mx9-solid","499318122","86352018","82.706012","57361.524","3244.182","3857.915","469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4","ok"
