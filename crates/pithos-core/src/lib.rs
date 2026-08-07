@@ -177,7 +177,10 @@ impl Default for DecodeLimits {
             max_dependency_depth: 32,
             max_rule_depth: 64,
             max_rules: 1_000_000,
-            max_expansion_ratio: 1000,
+            // Highly repetitive legitimate inputs can exceed 1000:1. The hard
+            // max_group_output remains the primary allocation/output bound, so
+            // this ratio can be permissive without allowing unbounded decode.
+            max_expansion_ratio: 65_536,
             max_metadata_bytes: 256 * 1024 * 1024,
             max_path_bytes: 32 * 1024,
             max_path_components: 1024,
