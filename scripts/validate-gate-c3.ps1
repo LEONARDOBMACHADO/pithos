@@ -28,10 +28,11 @@ function Capture-CommandText {
     )
 
     if ($null -eq (Get-Command $Command -ErrorAction SilentlyContinue)) {
-        return @("COMMAND_NOT_FOUND: $Command")
+        return [string[]]@("COMMAND_NOT_FOUND: $Command")
     }
 
-    return [string[]](& $Command @Arguments 2>&1 | ForEach-Object { $_.ToString() })
+    $captured = @(& $Command @Arguments 2>&1 | ForEach-Object { $_.ToString() })
+    return [string[]]$captured
 }
 
 function Invoke-EvidenceCommand {
@@ -52,12 +53,13 @@ function Invoke-EvidenceCommand {
     $commandInfo = Get-Command $Command -ErrorAction SilentlyContinue
 
     if ($null -eq $commandInfo) {
-        $output = @("COMMAND_NOT_FOUND: $Command")
+        $output = [string[]]@("COMMAND_NOT_FOUND: $Command")
         $exitCode = 127
     }
     else {
         $global:LASTEXITCODE = 0
-        $output = [string[]](& $Command @Arguments 2>&1 | ForEach-Object { $_.ToString() })
+        $captured = @(& $Command @Arguments 2>&1 | ForEach-Object { $_.ToString() })
+        $output = [string[]]$captured
         $exitCode = $LASTEXITCODE
         if ($null -eq $exitCode) {
             $exitCode = 0
