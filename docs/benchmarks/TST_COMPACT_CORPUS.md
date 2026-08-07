@@ -88,43 +88,66 @@ A matriz intencionalmente mistura conteúdo altamente compressível, estruturado
 já comprimido e alta entropia. Isso evita otimizar o Pithos para apenas um tipo
 de dado.
 
+## Download automatizado recomendado
+
+A forma preferida de criar a primeira versão do corpus é executar:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\fetch-tst-compact-samples.ps1
+```
+
+O downloader:
+
+- consulta `https://samplefile.com/samples/api/files?format=<extensão>`;
+- tenta 29 alvos de formato/tamanho da matriz acima;
+- escolhe o fixture disponível mais próximo do tamanho-alvo;
+- baixa para a subpasta correta;
+- valida o SHA-256 publicado antes de publicar o arquivo local;
+- nunca substitui silenciosamente um arquivo local com hash divergente;
+- cria, por padrão, duas cópias byte-exact de quatro famílias como controles de
+  dedup;
+- grava `source-register.csv` e `download-missing.txt` em `results/`.
+
+Se um formato não existir ou a API não retornar fixture utilizável, ele é
+registrado em `download-missing.txt`; não é criado conteúdo sintético para
+fingir cobertura. O benchmark pode rodar com os formatos disponíveis e a lacuna
+fica explícita para a próxima rodada.
+
+Use `-Force` apenas quando for intencional substituir uma fixture local cujo hash
+não coincide mais. `-SkipDuplicates` desliga somente a criação dos controles
+byte-exact.
+
 ## Fontes de download
 
 Preferir fontes que publiquem fixtures reais e checksum. Para o primeiro corpus,
-`https://samplefile.com/` é uma fonte adequada: possui uma biblioteca grande de
+`https://samplefile.com/` é a fonte-base: possui uma biblioteca grande de
 formatos, diversos tamanhos e SHA-256 publicado por fixture.
 
 Para código/binários adicionais, use somente projetos open-source/repositórios ou
 releases oficiais. Não baixe executáveis aleatórios de sites de terceiros apenas
 para aumentar variedade.
 
-Registre a origem de cada fixture em:
+O downloader registra cada fixture em:
 
 ```text
 tst_compact/results/source-register.csv
 ```
 
-com as colunas:
-
-```text
-relative_path,source_url,source_description
-```
-
-Esse arquivo não faz parte do corpus e pode ser copiado para a evidência se
-preenchido.
+com path relativo, formato, target MiB, tamanho efetivo, SHA-256, URL e descrição
+da origem. Esse registro não entra no corpus e é copiado para a evidência.
 
 ## Controles de deduplicação
 
-Depois de baixar os arquivos primários, crie em `duplicates/` **cópias byte a
-byte** de pelo menos quatro arquivos reais:
+O downloader cria em `duplicates/` **cópias byte a byte** de quatro famílias,
+quando existem fontes adequadas:
 
-- um TXT/CSV/JSON de 10–25 MiB;
-- um PDF de 10–25 MiB;
-- um PNG/JPEG de 10–25 MiB;
-- um ZIP/7z/RAR de 25–50 MiB.
+- TXT/CSV/JSON;
+- PDF;
+- PNG/JPEG;
+- ZIP/7z/RAR.
 
-Cada original deve possuir ao menos duas cópias com nomes diferentes. Não altere
-os bytes. Essas cópias são controles positivos para a deduplicação exata e
+Cada fonte selecionada recebe duas cópias com nomes diferentes. Não há alteração
+dos bytes. Essas cópias são controles positivos para a deduplicação exata e
 permitem medir quanto trabalho C3 consegue eliminar independentemente do codec.
 
 Near-duplicates serão adicionados em uma matriz separada quando similarity,
@@ -178,7 +201,9 @@ Ele executa, em sequência:
 2. `pithos-phasebench` para Scan → FastCDC → Fingerprints → Exact Dedup;
 3. benchmark de compactação/descompactação Pithos por arquivo e combinado;
 4. 7-Zip, WinRAR e WinZip quando encontrados;
-5. cópia somente dos relatórios pequenos para uma pasta versionável em
+5. `benchmark-summary.md` com ranking combinado, vitórias individuais e
+   distribuição percentual do tempo da análise de Fase 3;
+6. cópia somente dos relatórios pequenos para uma pasta versionável em
    `docs/benchmarks/evidence/tst-compact-<timestamp>/`.
 
 Os grandes arquivos compactados/descompactados ficam somente em
@@ -194,7 +219,9 @@ O baseline já produz:
 - tempo de verificação Pithos;
 - tempo de descompressão;
 - resultado por arquivo e `combined-all`;
-- tempo de scan, chunking, fingerprinting e exact dedup;
+- ranking humano do corpus combinado;
+- número de vitórias por tamanho nos arquivos individuais;
+- tempo e percentual de scan, chunking, fingerprinting e exact dedup;
 - chunks canônicos/referenciados;
 - duplicate bytes brutos;
 - custo das referências;
