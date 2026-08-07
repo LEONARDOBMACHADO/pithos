@@ -1,5 +1,6 @@
 //! CLI Commands and Argument Types
 
+use clap::builder::TypedValueParser as _;
 use clap::{Parser, Subcommand, ValueEnum};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -61,7 +62,7 @@ pub struct Cli {
 pub enum Commands {
     /// Empacotar arquivos em um contêiner .pits
     Pack {
-        #[arg(required = true)]
+        #[arg(required = true, value_parser = cli_pack_input_parser())]
         inputs: Vec<std::path::PathBuf>,
 
         /// Output archive. Defaults to <input-name>.pits for one input or files.pits for many.
@@ -102,6 +103,29 @@ pub enum Commands {
     Verify { archive: std::path::PathBuf },
     /// Exibir capacidades e versões do Pithos
     Capabilities,
+}
+
+fn cli_pack_input_parser() -> clap::builder::ValueParser {
+    clap::builder::OsStringValueParser::new()
+        .map(|value| normalize_cli_input_path(PathBuf::from(value)))
+        .into()
+}
+
+/// Gives a bare relative filename an explicit `.` parent while preserving
+/// absolute paths, nested relative paths and non-UTF-8 path data.
+///
+/// Rust represents the parent of `report.pdf` as an empty path. On Windows,
+/// `canonicalize("")` fails with `ERROR_PATH_NOT_FOUND`, while `./report.pdf`
+/// has the intended current-directory parent.
+pub fn normalize_cli_input_path(path: PathBuf) -> PathBuf {
+    if path
+        .parent()
+        .is_some_and(|parent| parent.as_os_str().is_empty())
+    {
+        PathBuf::from(".").join(path)
+    } else {
+        path
+    }
 }
 
 /// Computes the canonical default archive path without consulting filesystem state.
@@ -154,9 +178,22 @@ mod tests {
             Commands::Pack {
                 profile: CliProfile::Raw,
                 output: None,
+                ref inputs,
                 ..
-            }
+            } if inputs == &[PathBuf::from(".").join("input")]
         ));
+    }
+
+    #[test]
+    fn cli_pack_inputs_get_a_real_parent_without_changing_nested_paths() {
+        assert_eq!(
+            normalize_cli_input_path(PathBuf::from("report.pdf")),
+            PathBuf::from(".").join("report.pdf")
+        );
+        assert_eq!(
+            normalize_cli_input_path(PathBuf::from("folder/report.pdf")),
+            PathBuf::from("folder/report.pdf")
+        );
     }
 
     #[test]
