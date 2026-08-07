@@ -3,7 +3,7 @@ use pithos_core::{DecodeLimits, PithosError, Result};
 use pithos_engine_legacy::{CancellationToken, VerificationReport};
 use pithos_format::{FOOTER_LEN, Footer};
 use std::fs::File;
-use std::io::{Seek, SeekFrom, Read};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 pub fn verify(archive: &Path) -> Result<VerificationReport> {
