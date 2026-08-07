@@ -12,7 +12,7 @@ pithos-format = { path = "../pithos-format" }
 pithos-codecs = { path = "../pithos-codecs" }
 pithos-io = { path = "../pithos-io" }
 pithos-planner = { path = "../pithos-planner" }
-pithos-native-codec = { package = "pithos-native-codec-v9", path = "../pithos-native-codec-v9" }
+pithos-native-codec = { package = "pithos-native-codec-v10", path = "../pithos-native-codec-v10" }
 blake3.workspace = true
 crc32c.workspace = true
 serde.workspace = true
