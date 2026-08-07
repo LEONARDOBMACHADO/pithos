@@ -1,5 +1,5 @@
 use crate::{native_archive, native_verify};
-use pithos_core::{DecodeLimits, PithosError, Result};
+use pithos_core::{DecodeLimits, Result};
 use pithos_engine_legacy::{
     ArchiveEntryKind, ArchiveEntrySummary, ArchiveInspection, CancellationToken, UnpackRequest,
     VerificationReport,
