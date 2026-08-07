@@ -1,0 +1,30 @@
+﻿[
+    {
+        "branch":  "feat/09-native-synthetic-math",
+        "commit":  "7f10674e37e823a5c6b5db6515d54bfeb87c2750",
+        "compressor":  "pithos",
+        "profile":  "archive-max",
+        "original_bytes":  499318122,
+        "archive_bytes":  89024107,
+        "savings_percent":  82.170864,
+        "compress_ms":  923143.725,
+        "verify_ms":  1070.646,
+        "decompress_ms":  1816.51,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    },
+    {
+        "branch":  "feat/09-native-synthetic-math",
+        "commit":  "7f10674e37e823a5c6b5db6515d54bfeb87c2750",
+        "compressor":  "7zip",
+        "profile":  "lzma2-mx9-solid",
+        "original_bytes":  499318122,
+        "archive_bytes":  86352019,
+        "savings_percent":  82.706011,
+        "compress_ms":  60564.827,
+        "verify_ms":  3216.314,
+        "decompress_ms":  3631.395,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    }
+]
