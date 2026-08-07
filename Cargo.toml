@@ -9,6 +9,7 @@ members = [
     "crates/pithos-transforms",
     "crates/pithos-recompress",
     "crates/pithos-planner",
+    "crates/pithos-native-codec",
     "crates/pithos-engine",
     "crates/pithos-engine-next",
     "crates/pithos-agent-api",
