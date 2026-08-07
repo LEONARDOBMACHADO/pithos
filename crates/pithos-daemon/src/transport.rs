@@ -1290,10 +1290,30 @@ mod tests {
         protect_windows_state_dir(&state_dir).unwrap();
         let user_sid = current_user_sid_string().unwrap();
         let dacl = windows_path_dacl_sddl(&state_dir).unwrap();
-        assert!(dacl.contains(&user_sid));
-        assert!(dacl.contains("SY") || dacl.contains("S-1-5-18"));
-        for forbidden in [";;;WD)", ";;;AN)", ";;;AU)", ";;;BU)"] {
-            assert!(!dacl.contains(forbidden));
+        let current_user_present =
+            dacl.contains(&user_sid) || (user_sid == "S-1-5-18" && dacl.contains("SY"));
+        assert!(
+            current_user_present,
+            "restricted DACL does not contain current user SID {user_sid}: {dacl}"
+        );
+        assert!(
+            dacl.contains("SY") || dacl.contains("S-1-5-18"),
+            "restricted DACL does not contain LocalSystem: {dacl}"
+        );
+        for forbidden in [
+            ";;;WD)",
+            ";;;S-1-1-0)",
+            ";;;AN)",
+            ";;;S-1-5-7)",
+            ";;;AU)",
+            ";;;S-1-5-11)",
+            ";;;BU)",
+            ";;;S-1-5-32-545)",
+        ] {
+            assert!(
+                !dacl.contains(forbidden),
+                "restricted DACL contains forbidden principal {forbidden}: {dacl}"
+            );
         }
 
         let real = temp.path().join("real");
