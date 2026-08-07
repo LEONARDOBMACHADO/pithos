@@ -88,6 +88,7 @@ $reportNames = @(
     'corpus-manifest.csv',
     'corpus-summary.txt',
     'source-register.csv',
+    'download-missing.txt',
     'tools.txt',
     'phase-analysis.jsonl',
     'phase-analysis-summary.json',
