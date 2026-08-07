@@ -657,7 +657,7 @@ mod tests {
     // APIs/filesystems can reject ill-formed byte sequences with EILSEQ, so
     // the lossless non-UTF8 contract is exercised where such a name can
     // actually be created; symlink safety remains covered on every Unix.
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn gate_a_non_utf8_unix_path_roundtrips_losslessly() {
         use std::ffi::OsString;
