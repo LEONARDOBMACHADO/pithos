@@ -1,6 +1,6 @@
 # Pithos R1 — Architecture Decision Records (ADRs)
 
-Este documento registra as 10 decisões arquiteturais normativas e imutáveis da Fase -1 do Pithos R1.
+Este documento registra as decisões arquiteturais normativas do Pithos R1.
 
 ---
 
@@ -85,3 +85,10 @@ Este documento registra as 10 decisões arquiteturais normativas e imutáveis da
 - **Status:** Aceito
 - **Contexto:** O pipeline precisa agrupar chunks rapidamente e localizar similaridade sem transformar hashes probabilísticos em prova de igualdade.
 - **Decisão:** `pithos-analysis` calcula XXH3-64, BLAKE3-128, CRC32C e superfeatures determinísticas em uma passagem. O modo padrão retém BLAKE3-256 para grupos que colidem em `(xxh3, length, blake3_128)`; o modo paranoico o retém sempre. Lotes são limitados, canceláveis, paralelos e ordenados por `chunk_id`. Nenhum hash ou superfeature autoriza deduplicação: exact dedup e comparação byte a byte permanecem uma fase separada, junto da futura persistência em `ChunkTable`.
+
+---
+
+## ADR-013: Exact Dedup Gate & ChunkTable Boundary
+- **Status:** Aceito
+- **Contexto:** A Fase 3 precisa eliminar duplicates exatos sem permitir falsos positivos por colisão e sem acoplar prematuramente logical chunks ao layout físico de compression groups.
+- **Decisão:** `pithos-analysis` executa exact dedup em shards XXH3, filtra por comprimento e BLAKE3-128, calcula BLAKE3-256 apenas nos grupos candidatos e sempre confirma igualdade pelos bytes completos antes de emitir uma referência. O canonical é o menor `(entry_id, object_id, logical_offset, chunk_id)`. Uma referência só é emitida quando seu ganho líquido permanece positivo após `reference_cost_bytes` e a margem mínima configurada. O resultado é um `ExactDedupPlan` format-neutral e não altera o PAF. A persistência física por `ChunkTable` só pode começar após evidência do Gate C3 e deve manter `LogicalChunk`, `RestoreMap` e `GroupTable` como relações separadas; RAW e compressed atuais permanecem byte-idênticos até essa mudança de formato ser versionada, documentada, testada e fuzzada.
