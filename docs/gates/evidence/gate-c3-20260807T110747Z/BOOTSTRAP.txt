@@ -1,0 +1,5 @@
+runner=gate-c3-windows-v3
+timestamp_utc=2026-08-07T11:07:47.6347123Z
+powershell_version=5.1.26100.8875
+powershell_edition=Desktop
+repo=C:\Projetos\TESTE
