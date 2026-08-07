@@ -69,23 +69,40 @@ Write-Host "=== Corpus inventory ===" -ForegroundColor Cyan
 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'inventory-tst-compact.ps1') -Corpus $corpusPath
 $inventoryExit = $LASTEXITCODE
 
-Write-Host "`n=== Phase analysis benchmark ===" -ForegroundColor Cyan
-& cargo run --release -p pithos-bench --bin pithos-phasebench -- --corpus $corpusPath --results $resultsPath --max-total-mib $PhaseMaxTotalMiB
-$phaseExit = $LASTEXITCODE
+$corpusFiles = @(Get-ChildItem -LiteralPath $corpusPath -File -Recurse |
+    Where-Object { -not $_.FullName.StartsWith($resultsPath, [System.StringComparison]::OrdinalIgnoreCase) })
+$corpusFileCount = $corpusFiles.Count
 
-Write-Host "`n=== Codec contribution benchmark ===" -ForegroundColor Cyan
-& cargo run --release -p pithos-bench --bin pithos-codecbench -- --corpus $corpusPath --results $resultsPath
-$codecExit = $LASTEXITCODE
-
-Write-Host "`n=== Comparative compression benchmark ===" -ForegroundColor Cyan
-& cargo run --release -p pithos-bench --bin pithos-bench -- --corpus $corpusPath --results $resultsPath
-$benchmarkExit = $LASTEXITCODE
-
+$phaseExit = 0
+$codecExit = 0
+$benchmarkExit = 0
 $summaryExit = 0
-if (($benchmarkExit -eq 0) -and ($codecExit -eq 0)) {
-    Write-Host "`n=== Human-readable summary ===" -ForegroundColor Cyan
-    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'summarize-tst-compact.ps1') -Results $resultsPath
-    $summaryExit = $LASTEXITCODE
+$emptyCorpus = $corpusFileCount -eq 0
+
+if (-not $emptyCorpus) {
+    Write-Host "`n=== Phase analysis benchmark ===" -ForegroundColor Cyan
+    & cargo run --release -p pithos-bench --bin pithos-phasebench -- --corpus $corpusPath --results $resultsPath --max-total-mib $PhaseMaxTotalMiB
+    $phaseExit = $LASTEXITCODE
+
+    Write-Host "`n=== Codec contribution benchmark ===" -ForegroundColor Cyan
+    & cargo run --release -p pithos-bench --bin pithos-codecbench -- --corpus $corpusPath --results $resultsPath
+    $codecExit = $LASTEXITCODE
+
+    Write-Host "`n=== Comparative compression benchmark ===" -ForegroundColor Cyan
+    & cargo run --release -p pithos-bench --bin pithos-bench -- --corpus $corpusPath --results $resultsPath
+    $benchmarkExit = $LASTEXITCODE
+
+    if (($benchmarkExit -eq 0) -and ($codecExit -eq 0)) {
+        Write-Host "`n=== Human-readable summary ===" -ForegroundColor Cyan
+        & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'summarize-tst-compact.ps1') -Results $resultsPath
+        $summaryExit = $LASTEXITCODE
+    }
+} else {
+    Write-Warning 'Corpus is empty. Benchmark execution skipped; acquisition evidence will still be versioned.'
+    $phaseExit = 125
+    $codecExit = 125
+    $benchmarkExit = 125
+    $summaryExit = 125
 }
 
 $reportNames = @(
@@ -116,6 +133,8 @@ $summaryLines = @(
     "commit=$(& git rev-parse HEAD)",
     "branch=$(& git branch --show-current)",
     "inventory_exit=$inventoryExit",
+    "corpus_file_count=$corpusFileCount",
+    "empty_corpus=$emptyCorpus",
     "phasebench_exit=$phaseExit",
     "codecbench_exit=$codecExit",
     "benchmark_exit=$benchmarkExit",
@@ -127,6 +146,9 @@ $summaryLines = @(
 [System.IO.File]::WriteAllLines($summaryPath, [string[]]$summaryLines, $utf8)
 
 Write-Host "`nBenchmark evidence: $evidencePath" -ForegroundColor Green
+if ($emptyCorpus) {
+    exit 2
+}
 if (($inventoryExit -ne 0) -or ($phaseExit -ne 0) -or ($codecExit -ne 0) -or ($benchmarkExit -ne 0) -or ($summaryExit -ne 0)) {
     exit 1
 }
