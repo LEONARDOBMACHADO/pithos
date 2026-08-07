@@ -7,13 +7,13 @@ Este documento registra as decisões arquiteturais normativas do Pithos R1.
 ## ADR-001: Product and Format Versioning
 - **Status:** Aceito
 - **Contexto:** Necessidade de clareza no nome e versão do produto vs formato binário.
-- **Decisão:** O produto chama-se **Pithos R1**. A expressão "Pithos R1 / R3" está proibida. O formato binário é **PAF 0.1-draft** durante o desenvolvimento e será congelado como **PAF 1.0** no lançamento. A extensão pública oficial passa a ser **`.pts`**, preservando a assinatura consonantal P-T-S de Pithos. `.pithos` permanece aceita como extensão legada durante a transição; a identificação e validação do formato são feitas pelo magic/layout PAF e nunca pela extensão do filename.
+- **Decisão:** O produto chama-se **Pithos R1**. A expressão "Pithos R1 / R3" está proibida. O formato binário é **PAF 0.1-draft** durante o desenvolvimento e será congelado como **PAF 1.0** no lançamento. A extensão pública oficial é **`.phs`**, derivada de P-it-H-o-S e escolhida após revisão de colisões de extensões curtas. `.pts` foi considerada e chegou a ser usada provisoriamente durante desenvolvimento, mas já é uma extensão estabelecida para point clouds, PTGui e sessões antigas do Pro Tools; por isso não será a associação pública do Pithos. `.pithos` e a provisória `.pts` continuam legíveis durante desenvolvimento/transição. A identificação e validação do formato são feitas pelo magic/layout PAF e nunca pela extensão do filename.
 
 ---
 
 ## ADR-002: Seekable Pack Output
 - **Status:** Aceito
-- **Contexto:** Geração do arquivo `.pts` exige escrita de offsets globais, CentralIndex e BLAKE3 root no fechamento.
+- **Contexto:** Geração do arquivo `.phs` exige escrita de offsets globais, CentralIndex e BLAKE3 root no fechamento.
 - **Decisão:** A operação `pithos pack` exige estritamente um destino **seekable** (arquivo local ou handle seekable). O suporte a `pithos pack --stdout` NÃO faz parte do release R1. Extração para stdout (`pithos extract <entry> --stdout`) é permitida.
 
 ---
@@ -98,4 +98,4 @@ Este documento registra as decisões arquiteturais normativas do Pithos R1.
 ## ADR-014: Early Observability, Benchmarking & Ablation Baseline
 - **Status:** Aceito
 - **Contexto:** O plano oficial posiciona `pithos-telemetry`, `pithos-bench`, benchmarks contra ferramentas externas e ablation reports na Fase 11. Esperar até a Fase 11 impediria medir incrementalmente o custo e o benefício das Fases 3–10 e dificultaria identificar cedo técnicas que aumentam tempo/memória sem ganho líquido relevante.
-- **Decisão:** As fronteiras já previstas `pithos-telemetry` e `pithos-bench` são ativadas antecipadamente como **tooling de desenvolvimento**, sem alterar o bitstream PAF nem o caminho obrigatório de runtime. O corpus local padrão é `tst_compact/`, mantido fora do Git; seu manifesto SHA-256 e relatórios pequenos são versionáveis. O baseline mede arquivos individualmente e em conjunto, Pithos `balanced`/`archive-max`, e comparadores 7-Zip/WinRAR/WinZip quando disponíveis. A sonda de Fase 3 mede separadamente scan, chunking, fingerprinting e exact dedup, incluindo tempo e `net_saved_bytes`. Ganhos format-neutral são rotulados como potenciais até aparecerem no tamanho físico do `.pts`. Cada futura técnica relevante deverá reutilizar o mesmo corpus e produzir comparação antes/depois ou ablation equivalente antes de ser considerada vantajosa por padrão.
+- **Decisão:** As fronteiras já previstas `pithos-telemetry` e `pithos-bench` são ativadas antecipadamente como **tooling de desenvolvimento**, sem alterar o bitstream PAF nem o caminho obrigatório de runtime. O corpus local padrão é `tst_compact/`, mantido fora do Git; seu manifesto SHA-256 e relatórios pequenos são versionáveis. O baseline mede arquivos individualmente e em conjunto, Pithos `balanced`/`archive-max`, e comparadores 7-Zip/WinRAR/WinZip quando disponíveis. A sonda de Fase 3 mede separadamente scan, chunking, fingerprinting e exact dedup, incluindo tempo e `net_saved_bytes`. Ganhos format-neutral são rotulados como potenciais até aparecerem no tamanho físico do `.phs`. Cada futura técnica relevante deverá reutilizar o mesmo corpus e produzir comparação antes/depois ou ablation equivalente antes de ser considerada vantajosa por padrão.
