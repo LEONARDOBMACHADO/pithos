@@ -60,7 +60,8 @@ if ($wins.Count -eq 0) {
 } else {
     $lines.Add('| Compressor / profile | Files won |')
     $lines.Add('|---|---:|')
-    foreach ($item in ($wins.GetEnumerator() | Sort-Object Value -Descending, Name)) {
+    $sortedWins = @($wins.GetEnumerator() | Sort-Object -Property @{ Expression = 'Value'; Descending = $true }, @{ Expression = 'Name'; Descending = $false })
+    foreach ($item in $sortedWins) {
         $lines.Add("| $($item.Name) | $($item.Value) |")
     }
 }
