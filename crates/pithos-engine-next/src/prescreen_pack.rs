@@ -377,8 +377,7 @@ fn choose_with_prescreen(
         return encode_standard_selection(input, selection, false);
     }
     let standard_sample = deterministic_sample(input);
-    let standard_selection =
-        select_standard_selection(&standard_sample, profile, cancellation)?;
+    let standard_selection = select_standard_selection(&standard_sample, profile, cancellation)?;
     let standard_probe_bytes = standard_selection.primary_probe_bytes;
     let (native_sample, native_sample_lengths) =
         deterministic_member_sample(input, member_lengths)?;
@@ -391,9 +390,7 @@ fn choose_with_prescreen(
     };
     let material_exact_duplicates = if profile == CompressionProfile::ArchiveMax {
         let opportunity = dedup_probe::estimate(input, member_lengths)?;
-        opportunity
-            .gross_duplicate_bytes
-            .saturating_mul(100)
+        opportunity.gross_duplicate_bytes.saturating_mul(100)
             >= (input.len() as u64).saturating_mul(MATERIAL_EXACT_DUPLICATE_PERCENT)
     } else {
         false

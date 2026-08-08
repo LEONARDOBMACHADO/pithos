@@ -9,10 +9,7 @@ pub(crate) struct DuplicateOpportunity {
     pub gross_duplicate_bytes: u64,
 }
 
-pub(crate) fn estimate(
-    input: &[u8],
-    member_lengths: &[u64],
-) -> Result<DuplicateOpportunity> {
+pub(crate) fn estimate(input: &[u8], member_lengths: &[u64]) -> Result<DuplicateOpportunity> {
     validate_members(input.len(), member_lengths)?;
     let config = ChunkingConfig::default();
     let mut seen = HashMap::<[u8; 32], Vec<(usize, usize)>>::new();
@@ -89,7 +86,9 @@ fn validate_members(input_len: usize, member_lengths: &[u64]) -> Result<()> {
             .ok_or(PithosError::IntegerOverflow)
     })?;
     if total != input_len as u64 || (member_lengths.is_empty() && input_len != 0) {
-        return Err(PithosError::InvalidMetadata("dedup probe member boundaries"));
+        return Err(PithosError::InvalidMetadata(
+            "dedup probe member boundaries",
+        ));
     }
     Ok(())
 }
