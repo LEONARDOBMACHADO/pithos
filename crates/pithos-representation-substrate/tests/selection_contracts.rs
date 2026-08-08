@@ -53,6 +53,35 @@ fn sparse_xor_overlay_survives_real_candidate_selection() {
 }
 
 #[test]
+fn global_template_anchor_survives_beyond_recent_window() {
+    let base = deterministic_bytes(32 * 1024, 0x7f4a_7c15_9e37_79b9);
+    let mut members = Vec::new();
+    members.push(base.clone());
+
+    // Uniform-looking deterministic fillers have the same coarse high-nibble
+    // fingerprint and the same length, so they intentionally evict `base` from
+    // both bounded recent windows in the current implementation.
+    for index in 0..20_u64 {
+        members.push(deterministic_bytes(
+            32 * 1024,
+            0xd1b5_4a32_d192_ed03_u64.wrapping_add(index * 0x9e37),
+        ));
+    }
+
+    let mut near_copy = base;
+    for position in (101..near_copy.len()).step_by(4093) {
+        near_copy[position] ^= 0x5a;
+    }
+    members.push(near_copy);
+
+    let stats = encode_members(&members);
+    assert!(
+        stats.overlay_cells > 0,
+        "global template was lost after the bounded recent windows: {stats:?}"
+    );
+}
+
+#[test]
 fn binary_combinadic_survives_real_candidate_selection() {
     // Alternate all-zero and all-one 64-byte blocks. The global byte
     // distribution is 50/50, but each enumerative block has cardinality 0 or
