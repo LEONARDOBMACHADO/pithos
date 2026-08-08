@@ -1,3 +1,4 @@
+use crate::archive_affinity;
 use crate::native_archive::{self, RegistryEntry, encode_registry, read_catalog};
 use pithos_codecs::{BrotliCodec, Codec, CodecConfig, CodecId, Lzma2Codec, StoreCodec, ZstdCodec};
 use pithos_core::{CompressionProfile, DecodeLimits, PithosError, Result};
@@ -110,6 +111,10 @@ pub fn pack_with_limits_and_control(
             entry_id: entry.entry_id,
             bytes,
         });
+    }
+
+    if profile == CompressionProfile::ArchiveMax {
+        sources.sort_by_key(|source| archive_affinity::sort_key(&source.bytes, source.entry_id));
     }
 
     let lengths = sources
@@ -443,8 +448,6 @@ fn select_standard_candidate(
     }
     probes.sort_by_key(|(candidate, bytes)| (*bytes, speed_rank(candidate.codec)));
 
-    // ArchiveMax means exactly that: prefer the smallest measured candidate.
-    // Other profiles intentionally keep their existing speed/ratio tolerance.
     let (mut selected, mut selected_bytes) = if profile == CompressionProfile::ArchiveMax {
         probes[0]
     } else {
