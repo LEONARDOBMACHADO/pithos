@@ -1,30 +1,36 @@
 # Pithos Representation Substrate (PRS1)
 
-This document defines the first representation-first substrate for Pithos. It is intentionally not another historical native wrapper version.
+This document defines the representation-first substrate used by the Pithos compression research branch. PRS1 is intentionally not another historical native wrapper version.
 
 ## Goal
 
-Transform source bytes into the cheapest reversible representation before selecting an entropy backend. Standard codecs (Store/Zstd/Brotli/LZMA2) and the historical native stack remain competitors, not architectural parents.
+Transform source bytes into the cheapest reversible representation before selecting an entropy backend. Store, Zstd, LZMA2 and the historical native stack are competitors or leaf engines, not the architecture itself.
 
-## Current architecture
+## Implemented architecture
 
 ```text
 source group
     |
     v
-member-bounded recursive partitioner
+member-bounded multi-granular recursive packing
+(cost-driven split at 1/4, 1/2 or 3/4)
     |
     +--> exact shared reference
-    +--> template + sparse overlay
-    +--> low-cardinality mixture/index representation
-    +--> multiaxial nibble planes
-    +--> sparse defect lattice
-    +--> transition/run representation
+    +--> template + sparse replacement/XOR overlay
+    +--> low-cardinality bit-pack/combinadic mixture
+    +--> adaptive multiaxial representation
+    |      +--> nibble planes
+    |      +--> XOR-delta nibble planes
+    |      +--> even/odd positional planes
+    +--> sparse periodic defect lattice (period 1/2/4/8)
+    +--> transition/racetrack representation
+    |      +--> absolute state
+    |      +--> delta state
     +--> raw fallback
              |
              v
 orthogonal shared planes
- descriptor | raw | overlay | mixture | axis-hi | axis-lo | defect | transition
+ descriptor | raw | overlay | mixture | axis-A | axis-B | defect | transition
              |
              v
 per-plane Store / Zstd / bounded LZMA2 arbitration
@@ -33,101 +39,176 @@ per-plane Store / Zstd / bounded LZMA2 arbitration
 complete PRS1 payload
              |
              v
-experimental group-level race: PRS1 vs v17 vs v12, then native winner vs standard
+experimental group race: PRS1 vs v17 vs v12
+             |
+             v
+standard/native complete-archive planner
 ```
 
-## Integrated representation model
+## How the research ideas cooperate
 
-PRS1 combines eight research directions in one bounded deterministic planner:
+The design deliberately combines the storage analogies instead of applying them as serial wrappers.
 
-1. **Multi-Granular Recursive Packing** — recursively partitions member-bounded regions from MiB scale toward KiB scale only when quarter-region feature vectors show statistical heterogeneity. A strong single model prevents unnecessary splitting. Current hard bounds: 4 KiB minimum cell, 1 MiB maximum initial cell, recursion depth 8 and 1,000,000 cells.
-2. **Global Template + Sparse Overlay** — earlier cells are reusable templates. Full BLAKE3 plus byte equality provides exact references. A bounded coarse histogram index locates recent same-shape templates; sparse changes are stored as gap-varints plus replacement values only when cheaper.
-3. **Set + Permutation / Combinatorial Mixture** — current implementation handles low-cardinality cells with a 2–16 byte alphabet plus a 1–4 bit packed symbol-index stream. This is a concrete mixture representation, not yet a full enumerative combinatorial-rank coder; that stronger variant remains a future experiment.
-4. **Multiaxial Representation** — bytes can be transposed into high-nibble and low-nibble planes. Selection is based on the estimated entropy of the separated axes rather than an assumption that base conversion itself compresses data.
-5. **Orthogonal Representation Multiplexing** — descriptor, literal, overlay, mixture, axis, defect and transition data from many cells live in shared planes. This is the primary holographic-style software analogy: independent logical channels share one substrate but retain separate statistical contexts.
-6. **Sparse Defect Lattice** — when one value occupies at least 70% of a cell, that value becomes the implicit lattice default and only defect gaps plus values are materialized.
-7. **Topological Transition / Racetrack Coding** — repeated states are represented as state plus run distance instead of repeated values. The representation is retained only when its materialized stream is cheaper.
-8. **Shared Side Information** — standalone `.pits` uses only internal, previously decoded cells as side information. The architecture reserves externally resolved content-addressed references for Atlas/agent-native deployments, but PRS1 standalone payloads never depend on external state.
+### 1. Multi-Granular Recursive Packing — the original "box" idea
 
-## Synergy rather than wrappers
+The partitioner respects member boundaries and operates from MiB scale toward KiB scale. A region is not split merely because its local statistics look different. PRS1 evaluates candidate cut points near 1/4, 1/2 and 3/4 and estimates the cheapest intrinsic representation on each side. It recurses only when the two smaller regions plus split overhead beat the whole region by a minimum margin.
 
-The eight ideas are not applied serially. They cooperate in four layers:
+This is the software form of filling the large box first and then looking for smaller spaces that expose structure hidden at the larger scale.
 
-1. **Where:** recursive packing chooses the decision granularity.
-2. **How:** exact-ref, overlay, mixture, multiaxial, defect, transition and raw compete for each leaf.
-3. **Across leaves:** selected material is multiplexed into long homogeneous planes, allowing many leaves to share one entropy context.
-4. **Final cost:** every plane chooses an entropy backend, then the complete PRS1 payload competes against the complete historical representations.
+Current bounds:
 
-This explicitly avoids a `v19 -> v20 -> v21` transform cascade.
+- 4 KiB minimum cell;
+- 1 MiB maximum initial cell;
+- recursion depth 8;
+- 1,000,000 cell hard decoder/encoder limit;
+- split evaluation begins at 64 KiB.
 
-## PRS1 wire format
+### 2. Global Template + Sparse Overlay — epigenetic DNA analogy
 
-Current experimental payload magic: `PRS1`.
+Earlier decoded cells become internal side information. Exact reuse requires BLAKE3 identity plus byte equality. For same-length cells, PRS1 also searches bounded recent templates using both a coarse statistical fingerprint and a same-length window.
 
-The payload contains:
+A sparse overlay stores gap-varint positions and one residual byte per changed position. Two residual semantics compete:
+
+- replacement value;
+- XOR against the template value.
+
+The lower estimated-entropy residual wins. This lets near-identical cells share one template while materialising only their differences.
+
+### 3. Set / Combinatorial Mixture
+
+For cells containing 2–16 distinct symbols, PRS1 constructs an explicit alphabet and a compact index stream.
+
+Implemented modes:
+
+- 1–4 bit fixed symbol indexes for alphabets up to 16 symbols;
+- binary combinadic encoding in independent blocks of at most 64 symbols.
+
+The binary combinadic form stores the number of occurrences of symbol 1 plus the combinatorial rank of their positions. It competes against ordinary one-bit packing and is selected only when its materialized representation is smaller.
+
+This is the first true enumerative/combinatorial representation in Pithos rather than a base conversion.
+
+### 4. Adaptive Multiaxial Representation — 5D optical-storage analogy
+
+A byte stream can be projected into different logical axes before entropy coding. PRS1 currently races three reversible decompositions:
+
+- high-nibble / low-nibble planes;
+- previous-byte XOR delta followed by high/low nibble planes;
+- even-position / odd-position byte planes.
+
+The mode with the lowest combined estimated entropy plus metadata cost wins for that cell. The axes from many cells are then multiplexed into the same global axis planes.
+
+This is materially different from the old fixed quaternary transform: representation dimensionality is selected adaptively and competes against all other cell models.
+
+### 5. Orthogonal Representation Multiplexing — holographic analogy
+
+Selected cell material is not entropy-coded cell-by-cell. Similar logical material from all leaves is accumulated into eight homogeneous planes:
+
+1. descriptor;
+2. raw literals;
+3. overlays;
+4. mixture/combinatorial payloads;
+5. axis A;
+6. axis B;
+7. defect payloads;
+8. transition payloads.
+
+Each plane receives one shared entropy context. This is the core synergy between the individual models: recursive packing discovers structure locally, while multiplexing lets many local winners share a long global statistical context.
+
+### 6. Sparse Defect Lattice — atomic vacancy analogy
+
+PRS1 searches implicit periodic lattices with periods 1, 2, 4 and 8. For each residue position it derives the modal byte, then chooses the pattern producing the largest number of matches.
+
+If at least 70% of the cell follows the periodic lattice, only gap-varint defect positions and replacement bytes are stored. A perfect lattice is valid and can be represented by its pattern with zero defect payload bytes.
+
+This generalises the old single-default-byte model to short implicit structures.
+
+### 7. Topological Transition / Racetrack Coding
+
+Long runs are represented as state plus run distance. PRS1 constructs two state streams:
+
+- absolute state value;
+- first absolute state followed by wrapping deltas between successive states.
+
+The lower estimated-entropy stream wins. This is useful when run values themselves move predictably even when the run lengths vary.
+
+### 8. Shared Side Information — quantum communication analogy
+
+Standalone `.pits` remains fully self-contained. Its side information is limited to cells already encoded inside the same PRS1 payload: exact references and template overlays.
+
+The architecture deliberately leaves external content-addressed side information for Atlas/agent-native deployments. An external-reference mode must be explicit because it changes the decode contract: it cannot silently enter standalone PRS1 archives. The current branch therefore implements the reusable internal mechanism but does not make `.pits` dependent on Atlas.
+
+## Cost planner
+
+PRS1 has two planning levels.
+
+### Cell-level planning
+
+For each leaf, raw, exact-ref, overlay, mixture, defect, transition and multiaxial representations compete. Candidate scoring includes representation metadata and an entropy estimate of the material that will enter the shared plane.
+
+### Final physical planning
+
+Cell winners are multiplexed into planes. Every non-empty plane races Store and Zstd. Bounded transformed planes from 64 KiB through 64 MiB additionally race LZMA2. The raw plane deliberately does not rerun LZMA2 because the complete standard/native path already supplies that expensive candidate.
+
+Finally the complete PRS1 payload competes against complete v17 and v12 payloads. A local representation is therefore not considered a product win until the complete physical payload wins.
+
+## Cost and memory policy
+
+The current compatibility selector races complete v17, v12 and PRS1 candidates.
+
+- groups up to 128 MiB may use a three-way parallel race;
+- above 128 MiB, v17 and v12 complete first and PRS1 runs separately;
+- PRS1 caps recursive depth and cell count;
+- decoder plane lengths are validated before allocation;
+- aggregate decoded-plane bytes are bounded;
+- malformed modes, periods, combinadic ranks, CRCs and trailing bytes fail closed;
+- PRS1 failure makes that candidate unavailable without invalidating the historical candidates.
+
+## Observability
+
+`PITHOS_REP_TRACE=1` records complete representation races and PRS1 cell counts. The R5 runner is expected to retain both family counts and sub-mode counts:
+
+- raw;
+- exact reference;
+- overlay total / XOR overlay;
+- mixture total / combinadic mixture;
+- axial total / XOR-nibble / even-odd;
+- defect total / periodic defect;
+- transition total / delta transition.
+
+This allows each physical-storage inspiration to be kept or removed based on measured wins rather than intuition.
+
+## Wire format and compatibility
+
+Experimental payload magic remains `PRS1`. Internal format version is currently `2`.
+
+The envelope remains deliberately stable in shape:
 
 - fixed 24-byte PRS1 header;
 - exactly eight fixed plane records;
 - each record stores plane id, entropy codec id, decoded plane length, encoded plane length and CRC32C;
-- encoded planes concatenated in deterministic id order.
+- encoded planes are concatenated in deterministic id order.
 
-The decoder validates magic, version, declared original length, cell count, plane identities, CRCs, raw/encoded size bounds and exact plane consumption before returning the group bytes.
+Version 2 adds representation mode bytes inside the descriptor plane for overlay, mixture, axial and transition models and stores the defect-lattice period/pattern in the descriptor.
 
-## Entropy policy
+During this experiment PRS1 is transported through native codec v18 only as a compatibility dispatch. v18 detects the `PRS1` magic on decode and delegates to the independent substrate decoder. PAF tables, RestoreMap and the current registry do not change during the experiment.
 
-- **Store** is always the baseline.
-- **Zstd** is evaluated for every non-empty plane.
-- **LZMA2** is evaluated only for transformed planes between 64 KiB and 64 MiB.
-- The raw plane deliberately does not rerun LZMA2 because the standard full-group path already provides that expensive candidate; duplicating it inside PRS1 adds CPU without creating a new representation.
-
-This makes entropy codecs leaf engines rather than product identity.
-
-## Cost and memory policy
-
-The current compatibility selector races complete `v17`, `v12` and PRS1 candidates.
-
-- Groups up to 128 MiB may use a three-way parallel race.
-- Above 128 MiB, `v17` and `v12` finish first and PRS1 runs separately, bounding peak memory rather than holding three large representation worksets concurrently.
-- The PRS1 decoder hard-limits cell count, per-plane decoded length and aggregate plane decoded length before allocation.
-- PRS1 candidate failure does not invalidate historical native compression; it is treated as an unavailable candidate and the older representations remain eligible.
-
-## Observability
-
-`PITHOS_REP_TRACE=1` records:
-
-- race mode (`parallel` or `bounded-sequential`);
-- v17, v12 and PRS1 complete payload bytes and elapsed time;
-- winning representation;
-- PRS1 cell count and counts selected as raw, exact reference, sparse overlay, mixture, axial, defect and transition.
-
-This is required so representation techniques can be retained or removed based on evidence rather than intuition.
-
-## PAF / compatibility strategy
-
-PRS1 is an independent crate: `pithos-representation-substrate`.
-
-During this experiment, PRS1 is transported through native codec v18 only as a compatibility dispatch:
-
-- encoder v18 may select a complete PRS1 payload;
-- decoder v18 detects `PRS1` magic and delegates to the independent substrate decoder;
-- PAF tables, RestoreMap and the current codec registry do not change during the experiment.
-
-`SUBSTRATE_CODEC_ID = 5` and substrate version 1 are reserved for a future explicit registry promotion **only if PRS1 proves itself empirically**. Promotion will require a deliberate format/compatibility migration instead of silently redefining existing native identity.
+`SUBSTRATE_CODEC_ID = 5` is reserved for an explicit future registry promotion only if PRS1 proves itself empirically. Promotion requires a deliberate format/compatibility migration.
 
 ## Decoder contract
 
-PRS1 reconstructs the exact concatenated group bytes. The existing RestoreMap restores individual files, so the representation experiment does not alter file restoration semantics.
+PRS1 reconstructs the exact concatenated group bytes. Existing RestoreMap handling restores individual files, so the representation experiment does not change path, hardlink, symlink or file restoration semantics.
 
 ## Hard rules
 
-- Deterministic and byte-exact.
-- Member boundaries are respected by recursive partitioning.
-- Exact references require BLAKE3 identity plus byte equality.
-- Candidate generation is bounded.
-- External side information is never required to decode standalone `.pits`.
-- No physical-density or quantum-compression claim is made.
-- A representation is useful only if the final complete payload beats the competing representation after all metadata and entropy coding.
+- deterministic and byte-exact;
+- member boundaries respected;
+- exact references require full BLAKE3 plus byte equality;
+- candidate search is bounded;
+- no required external state for standalone `.pits`;
+- no claim that DNA, glass, holographic, atomic, racetrack or quantum physics themselves compress classical files;
+- physical technologies are used only as inspiration for reversible representation structures;
+- every representation must justify itself at final physical payload level.
 
-## Research lineage
+## Architectural direction
 
-The design is inspired by universal-template/epigenetic DNA storage, multidimensional optical storage, multiplexed holographic channels, atomic-vacancy lattices, multistate/racetrack memory and shared-side-information ideas from quantum communication. PRS1 uses only reversible classical algorithms; the physical systems are inspiration for representation structure, not evidence of impossible compression gains.
+The intended endpoint is not `v19 -> v20 -> v21`. If empirical results validate PRS1 concepts, the winning representations will be consolidated into one representation substrate and the historical native versions will become compatibility/floor implementations rather than the identity of the compressor.
