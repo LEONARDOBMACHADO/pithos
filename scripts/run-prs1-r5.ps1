@@ -20,11 +20,13 @@ $allowedLocal = @(
     'docs/gates/GATE_A_EVIDENCE.md',
     'docs/gates/GATE_B_EVIDENCE.md'
 )
-function Get-UnexpectedStatus {
+function Get-UnexpectedStatus([switch]$AllowCargoLock) {
     $rows = @(& git status --porcelain)
     return @($rows | Where-Object {
         $path = if ($_.Length -gt 3) { $_.Substring(3).Replace('\\','/') } else { $_ }
-        $allowedLocal -notcontains $path
+        if ($allowedLocal -contains $path) { return $false }
+        if ($AllowCargoLock -and $path -eq 'Cargo.lock') { return $false }
+        return $true
     })
 }
 
@@ -32,6 +34,35 @@ $unexpected = @(Get-UnexpectedStatus)
 if ($unexpected.Count -gt 0) {
     $unexpected | ForEach-Object { Write-Host $_ -ForegroundColor Red }
     throw 'Unexpected local changes before PRS1 R5.'
+}
+
+# A new workspace crate must be represented by a Cargo-generated lockfile before
+# any benchmark is accepted. Never benchmark an uncommitted dependency graph.
+$lockHasSubstrate = Select-String -LiteralPath (Join-Path $repo 'Cargo.lock') `
+    -SimpleMatch 'name = "pithos-representation-substrate"' -Quiet
+if (-not $lockHasSubstrate) {
+    Write-Host '=== PRS1 R5 LOCKFILE PREPARATION ===' -ForegroundColor Yellow
+    & cargo generate-lockfile
+    if ($LASTEXITCODE -ne 0) { throw 'cargo generate-lockfile failed' }
+
+    $unexpectedAfterLock = @(Get-UnexpectedStatus -AllowCargoLock)
+    if ($unexpectedAfterLock.Count -gt 0) {
+        $unexpectedAfterLock | ForEach-Object { Write-Host $_ -ForegroundColor Red }
+        throw 'Lockfile generation changed files other than Cargo.lock.'
+    }
+    $status = @(& git status --porcelain)
+    $cargoLockChanged = @($status | Where-Object {
+        $_.Length -gt 3 -and $_.Substring(3).Replace('\\','/') -eq 'Cargo.lock'
+    }).Count -eq 1
+    if (-not $cargoLockChanged) {
+        throw 'Cargo.lock did not change as expected after adding PRS1 workspace crate.'
+    }
+
+    Write-Host "`n===== CARGO.LOCK GENERATED DIFF =====" -ForegroundColor Cyan
+    & git diff -- Cargo.lock
+    Write-Host "`nSTOP: commit the Cargo-generated lockfile upstream before R5 benchmark." -ForegroundColor Yellow
+    Write-Host 'Do not edit Cargo.lock manually. Return this diff and git status.'
+    exit 23
 }
 
 Write-Host '=== PRS1 R5 STATIC/ROUNDTRIP GATES ===' -ForegroundColor Cyan
@@ -136,10 +167,16 @@ $summaryPath = Join-Path $evidence.FullName 'PRS1_R5_SUMMARY.txt'
     "raw_cells=$(& $sum 'raw')",
     "exact_ref_cells=$(& $sum 'exact_ref')",
     "overlay_cells=$(& $sum 'overlay')",
+    "overlay_xor_cells=$(& $sum 'overlay_xor')",
     "mixture_cells=$(& $sum 'mixture')",
+    "mixture_combinadic_cells=$(& $sum 'mixture_combinadic')",
     "axial_cells=$(& $sum 'axial')",
+    "axial_xor_cells=$(& $sum 'axial_xor')",
+    "axial_even_odd_cells=$(& $sum 'axial_even_odd')",
     "defect_cells=$(& $sum 'defect')",
+    "periodic_defect_cells=$(& $sum 'periodic_defect')",
     "transition_cells=$(& $sum 'transition')",
+    "delta_transition_cells=$(& $sum 'delta_transition')",
     '7zip_executed=False',
     'winrar_executed=False',
     'winzip_executed=False'
