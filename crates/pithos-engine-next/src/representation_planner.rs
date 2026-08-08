@@ -111,9 +111,12 @@ pub fn pack_with_limits_and_control(
 }
 
 fn representation_trace_enabled() -> bool {
-    std::env::var("PITHOS_REP_TRACE")
-        .ok()
-        .is_some_and(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+    std::env::var("PITHOS_REP_TRACE").ok().is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
 }
 
 fn checkpoint(cancellation: &CancellationToken) -> Result<()> {
