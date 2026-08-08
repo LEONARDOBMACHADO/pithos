@@ -47,6 +47,41 @@ pub fn pack_with_limits_and_control(
     } = request;
     let parent = output.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent)?;
+
+    // With one member the class-aware and global plans are physically
+    // equivalent: both contain exactly one solid group with that member. Do not
+    // encode the same archive twice merely to prove an equality that follows
+    // from the planner inputs. This materially reduces R5 individual-case work
+    // without changing the selected bytes.
+    if inputs.len() == 1 {
+        trace_archive_scope("begin", "class-aware");
+        let started = Instant::now();
+        let result = affinity_plan::with_mode(affinity_plan::PlannerMode::ClassAware, || {
+            prescreen_pack::pack_with_limits_and_control(
+                PackRequest {
+                    inputs,
+                    output: output.clone(),
+                    profile,
+                },
+                limits,
+                cancellation,
+            )
+        });
+        let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+        trace_archive_scope("end", "class-aware");
+        result?;
+        let bytes = fs::metadata(&output)?.len();
+        if representation_trace_enabled() {
+            eprintln!(
+                "PITHOS_REP_TRACE\tstage=archive_candidate\tcandidate=class-aware\tbytes={bytes}\tms={elapsed_ms:.3}\treason=single-input-equivalent"
+            );
+            eprintln!(
+                "PITHOS_REP_TRACE\tstage=archive_winner\twinner=class-aware\tbytes={bytes}\tclass_bytes={bytes}\tglobal_bytes={bytes}\ttotal_candidate_ms={elapsed_ms:.3}\treason=single-input-equivalent"
+            );
+        }
+        return Ok(());
+    }
+
     let candidates = tempfile::Builder::new()
         .prefix(".pithos-representation-planner-")
         .tempdir_in(parent)?;
