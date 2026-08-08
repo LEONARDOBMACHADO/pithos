@@ -120,3 +120,19 @@ fn delta_transition_survives_real_candidate_selection() {
         "delta-state transition mode never survived selection: {stats:?}"
     );
 }
+
+#[test]
+fn recursive_packing_must_split_mixed_low_cardinality_regions() {
+    // Four symbols are globally "simple", but the two halves have radically
+    // different structure: one constant half and one three-symbol half. A
+    // global unique<=4 shortcut must not suppress the real 1/2 split, whose
+    // intrinsic representation cost is materially lower.
+    let half = 128 * 1024;
+    let mut input = vec![b'A'; half];
+    input.extend((0..half).map(|index| [b'B', b'C', b'D'][index % 3]));
+    let stats = encode_one(&input);
+    assert!(
+        stats.cell_count > 1,
+        "recursive packing was suppressed by a whole-block strong-model shortcut: {stats:?}"
+    );
+}
