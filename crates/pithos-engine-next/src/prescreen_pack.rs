@@ -1,5 +1,5 @@
 use crate::native_archive::{self, RegistryEntry, encode_registry, read_catalog};
-use crate::{affinity_plan, archive_affinity, dedup_probe};
+use crate::{affinity_plan, archive_affinity};
 use pithos_codecs::{BrotliCodec, Codec, CodecConfig, CodecId, Lzma2Codec, StoreCodec, ZstdCodec};
 use pithos_core::{CompressionProfile, DecodeLimits, PithosError, Result};
 use pithos_engine_legacy::{CancellationToken, PackLimits, PackRequest};
@@ -21,9 +21,8 @@ const NATIVE_SAMPLE_MEMBER_BYTES: usize = 96 * 1024;
 const MAX_NATIVE_SAMPLE_BYTES: usize = 3 * 1024 * 1024;
 const NATIVE_CHAIN_ID: u32 = 5;
 const MIN_NATIVE_GROUP_BYTES: usize = 1024 * 1024;
+const ARCHIVE_MAX_OUTER_PARALLEL_MAX_INPUT_BYTES: usize = 64 * 1024 * 1024;
 const IO_BUFFER_SIZE: usize = 64 * 1024;
-const ARCHIVE_MAX_FINALIST_PERCENT: usize = 101;
-const MATERIAL_EXACT_DUPLICATE_PERCENT: u64 = 5;
 
 #[derive(Debug)]
 struct SourceData {
@@ -39,7 +38,6 @@ struct Candidate {
 struct StandardSelection {
     primary: Candidate,
     primary_probe_bytes: usize,
-    secondary: Option<Candidate>,
 }
 #[derive(Debug)]
 struct EncodedChoice {
@@ -190,19 +188,45 @@ pub fn pack_with_limits_and_control(
             member_lengths.push(source.bytes.len() as u64);
             input.extend_from_slice(&source.bytes);
         }
-        let allow_parallel = std::thread::available_parallelism()
-            .map(|value| value.get() > 1)
-            .unwrap_or(false)
-            && (input.len() as u64)
-                .checked_mul(5)
-                .is_some_and(|peak| peak <= limits.max_memory_bytes);
-        let choice = choose_with_prescreen(
+
+        let available_parallelism = std::thread::available_parallelism()
+            .map(|value| value.get())
+            .unwrap_or(1);
+        let memory_allows_parallel = (input.len() as u64)
+            .checked_mul(5)
+            .is_some_and(|peak| peak <= limits.max_memory_bytes);
+        let archive_max_parallel_ok = profile != CompressionProfile::ArchiveMax
+            || (available_parallelism >= 4
+                && input.len() <= ARCHIVE_MAX_OUTER_PARALLEL_MAX_INPUT_BYTES);
+        let allow_parallel =
+            available_parallelism > 1 && memory_allows_parallel && archive_max_parallel_ok;
+
+        trace_group_scope(
+            "begin",
+            group_id,
+            input.len(),
+            member_lengths.len(),
+            allow_parallel,
+        );
+        let choice_result = choose_with_prescreen(
             &input,
             &member_lengths,
             profile,
             cancellation,
             allow_parallel,
-        )?;
+        );
+        if let Ok(choice) = &choice_result {
+            trace_group_choice(group_id, input.len(), member_lengths.len(), choice);
+        }
+        trace_group_scope(
+            "end",
+            group_id,
+            input.len(),
+            member_lengths.len(),
+            allow_parallel,
+        );
+        let choice = choice_result?;
+
         let payload_offset = spool.stream_position()?;
         spool.write_all(&choice.payload)?;
         let crc = crc32c::crc32c(&choice.payload);
@@ -380,10 +404,23 @@ fn choose_with_prescreen(
     cancellation: &CancellationToken,
     allow_parallel: bool,
 ) -> Result<EncodedChoice> {
+    // ArchiveMax is a size-optimal research/profile contract: deterministic
+    // samples may order work, but they must never remove a complete candidate
+    // from the physical race. This also ensures groups below 1 MiB can use v18
+    // / PRS1 when that representation is actually smaller.
+    if profile == CompressionProfile::ArchiveMax {
+        return choose_archive_max_full(
+            input,
+            member_lengths,
+            cancellation,
+            allow_parallel,
+        );
+    }
+
     if input.len() < MIN_NATIVE_GROUP_BYTES {
         let selection =
             select_standard_selection(&deterministic_sample(input), profile, cancellation)?;
-        return encode_standard_selection(input, selection, false);
+        return encode_standard_selection(input, selection);
     }
     let standard_sample = deterministic_sample(input);
     let standard_selection = select_standard_selection(&standard_sample, profile, cancellation)?;
@@ -397,26 +434,16 @@ fn choose_with_prescreen(
             .0
             .len()
     };
-    let material_exact_duplicates = if profile == CompressionProfile::ArchiveMax {
-        let opportunity = dedup_probe::estimate(input, member_lengths)?;
-        opportunity.gross_duplicate_bytes.saturating_mul(100)
-            >= (input.len() as u64).saturating_mul(MATERIAL_EXACT_DUPLICATE_PERCENT)
-    } else {
-        false
-    };
     if native_probe_bytes.saturating_mul(100) <= standard_probe_bytes.saturating_mul(95) {
         return encode_native_full(input, member_lengths, profile);
     }
-    if !material_exact_duplicates
-        && standard_probe_bytes.saturating_mul(100) <= native_probe_bytes.saturating_mul(88)
-    {
-        return encode_standard_selection(input, standard_selection, allow_parallel);
+    if standard_probe_bytes.saturating_mul(100) <= native_probe_bytes.saturating_mul(88) {
+        return encode_standard_selection(input, standard_selection);
     }
 
     if allow_parallel {
         let (standard_result, native_result) = std::thread::scope(|scope| {
-            let standard_handle =
-                scope.spawn(|| encode_standard_selection(input, standard_selection, false));
+            let standard_handle = scope.spawn(|| encode_standard_selection(input, standard_selection));
             let native_handle = scope.spawn(|| encode_native_full(input, member_lengths, profile));
             (standard_handle.join(), native_handle.join())
         });
@@ -427,29 +454,64 @@ fn choose_with_prescreen(
             .map_err(|_| PithosError::InvalidMetadata("native candidate worker panic"))??;
         return Ok(smaller_choice(standard, native));
     }
-    let standard = encode_standard_selection(input, standard_selection, false)?;
+    let standard = encode_standard_selection(input, standard_selection)?;
     checkpoint(cancellation)?;
     let native = encode_native_full(input, member_lengths, profile)?;
     Ok(smaller_choice(standard, native))
 }
 
-fn encode_standard_selection(
+fn choose_archive_max_full(
     input: &[u8],
-    selection: StandardSelection,
-    race_secondary: bool,
+    member_lengths: &[u64],
+    cancellation: &CancellationToken,
+    allow_parallel: bool,
 ) -> Result<EncodedChoice> {
-    if race_secondary && let Some(secondary) = selection.secondary {
-        let (primary_result, secondary_result) = std::thread::scope(|scope| {
-            let primary = scope.spawn(|| encode_standard_full(input, selection.primary));
-            let secondary = scope.spawn(|| encode_standard_full(input, secondary));
-            (primary.join(), secondary.join())
+    if allow_parallel {
+        let (standard_result, native_result) = std::thread::scope(|scope| {
+            // Keep the standard portfolio sequential inside one worker. The
+            // native worker already contains its own bounded v17/v12/PRS1 race,
+            // and LZMA2 may also use internal workers. This avoids multiplying
+            // parallelism layers while still overlapping the two orthogonal
+            // candidate families on moderate groups.
+            let standard_handle = scope.spawn(|| encode_archive_max_standard(input, cancellation));
+            let native_handle = scope.spawn(|| {
+                encode_native_full(input, member_lengths, CompressionProfile::ArchiveMax)
+            });
+            (standard_handle.join(), native_handle.join())
         });
-        let primary = primary_result
-            .map_err(|_| PithosError::InvalidMetadata("primary standard worker panic"))??;
-        let secondary = secondary_result
-            .map_err(|_| PithosError::InvalidMetadata("secondary standard worker panic"))??;
-        return Ok(smaller_choice(primary, secondary));
+        checkpoint(cancellation)?;
+        let standard = standard_result
+            .map_err(|_| PithosError::InvalidMetadata("ArchiveMax standard worker panic"))??;
+        let native = native_result
+            .map_err(|_| PithosError::InvalidMetadata("ArchiveMax native worker panic"))??;
+        return Ok(smaller_choice(standard, native));
     }
+
+    let standard = encode_archive_max_standard(input, cancellation)?;
+    checkpoint(cancellation)?;
+    let native = encode_native_full(input, member_lengths, CompressionProfile::ArchiveMax)?;
+    Ok(smaller_choice(standard, native))
+}
+
+fn encode_archive_max_standard(
+    input: &[u8],
+    cancellation: &CancellationToken,
+) -> Result<EncodedChoice> {
+    let mut best = None::<EncodedChoice>;
+    for candidate in profile_candidates(CompressionProfile::ArchiveMax) {
+        checkpoint(cancellation)?;
+        let encoded = encode_standard_full(input, candidate)?;
+        best = Some(match best {
+            Some(current) => smaller_choice(current, encoded),
+            None => encoded,
+        });
+    }
+    best.ok_or(PithosError::InvalidMetadata(
+        "ArchiveMax standard candidate set",
+    ))
+}
+
+fn encode_standard_selection(input: &[u8], selection: StandardSelection) -> Result<EncodedChoice> {
     encode_standard_full(input, selection.primary)
 }
 
@@ -480,6 +542,11 @@ fn select_standard_selection(
     profile: CompressionProfile,
     cancellation: &CancellationToken,
 ) -> Result<StandardSelection> {
+    if profile == CompressionProfile::ArchiveMax {
+        return Err(PithosError::InvalidMetadata(
+            "ArchiveMax requires full standard candidate race",
+        ));
+    }
     let candidates = profile_candidates(profile);
     let mut probes = Vec::with_capacity(candidates.len());
     for candidate in &candidates {
@@ -496,48 +563,28 @@ fn select_standard_selection(
     }
     probes.sort_by_key(|(candidate, bytes)| (*bytes, speed_rank(candidate.codec)));
 
-    let (mut selected, mut selected_bytes, mut secondary) =
-        if profile == CompressionProfile::ArchiveMax {
-            let (primary, primary_bytes) = probes[0];
-            let secondary = probes.get(1).and_then(|(candidate, bytes)| {
-                if primary.codec != CodecId::Store
-                    && candidate.codec != CodecId::Store
-                    && bytes.saturating_mul(100)
-                        <= primary_bytes.saturating_mul(ARCHIVE_MAX_FINALIST_PERCENT)
-                {
-                    Some(*candidate)
-                } else {
-                    None
-                }
-            });
-            (primary, primary_bytes, secondary)
-        } else {
-            let best_bytes = probes[0].1;
-            let tolerance = match profile {
-                CompressionProfile::Balanced => 1.01,
-                _ => 1.02,
-            };
-            let mut eligible = probes
-                .iter()
-                .filter(|(_, bytes)| (*bytes as f64) <= best_bytes as f64 * tolerance)
-                .map(|(candidate, bytes)| (*candidate, *bytes))
-                .collect::<Vec<_>>();
-            eligible.sort_by_key(|(candidate, _)| speed_rank(candidate.codec));
-            let (selected, selected_bytes) = eligible[0];
-            (selected, selected_bytes, None)
-        };
+    let best_bytes = probes[0].1;
+    let tolerance = match profile {
+        CompressionProfile::Balanced => 1.01,
+        _ => 1.02,
+    };
+    let mut eligible = probes
+        .iter()
+        .filter(|(_, bytes)| (*bytes as f64) <= best_bytes as f64 * tolerance)
+        .map(|(candidate, bytes)| (*candidate, *bytes))
+        .collect::<Vec<_>>();
+    eligible.sort_by_key(|(candidate, _)| speed_rank(candidate.codec));
+    let (mut selected, mut selected_bytes) = eligible[0];
     if selected.codec != CodecId::Store && selected_bytes >= sample.len() {
         selected = Candidate {
             codec: CodecId::Store,
             level: 0,
         };
         selected_bytes = sample.len();
-        secondary = None;
     }
     Ok(StandardSelection {
         primary: selected,
         primary_probe_bytes: selected_bytes,
-        secondary,
     })
 }
 fn encode_standard_full(input: &[u8], candidate: Candidate) -> Result<EncodedChoice> {
@@ -758,6 +805,39 @@ fn checkpoint(cancellation: &CancellationToken) -> Result<()> {
         Err(PithosError::Cancelled)
     } else {
         Ok(())
+    }
+}
+fn representation_trace_enabled() -> bool {
+    std::env::var("PITHOS_REP_TRACE").ok().is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+fn trace_group_scope(
+    phase: &str,
+    group_id: usize,
+    input_bytes: usize,
+    members: usize,
+    parallel: bool,
+) {
+    if representation_trace_enabled() {
+        eprintln!(
+            "PITHOS_REP_TRACE\tstage=group_scope\tphase={phase}\tgroup={group_id}\tinput_bytes={input_bytes}\tmembers={members}\tparallel={parallel}"
+        );
+    }
+}
+fn trace_group_choice(group_id: usize, input_bytes: usize, members: usize, choice: &EncodedChoice) {
+    if representation_trace_enabled() {
+        eprintln!(
+            "PITHOS_REP_TRACE\tstage=group_choice\tgroup={group_id}\tinput_bytes={input_bytes}\tmembers={members}\tchain_id={}\tcodec_id={}\tcodec_version={}\tlevel={}\tpayload_bytes={}",
+            choice.chain_id,
+            choice.codec_id,
+            choice.codec_version,
+            choice.level,
+            choice.payload.len()
+        );
     }
 }
 fn path_entry_exists(path: &Path) -> Result<bool> {
