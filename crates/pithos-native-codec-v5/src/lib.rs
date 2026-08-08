@@ -158,7 +158,9 @@ fn model_member(member: &[u8]) -> Result<(Vec<u8>, Model)> {
             }
         }
     }
-    if member.starts_with(b"\x89PNG\r\n\x1a\n") && let Some(parts) = parse_png(member)? {
+    if member.starts_with(b"\x89PNG\r\n\x1a\n")
+        && let Some(parts) = parse_png(member)?
+    {
         let mut decoder = ZlibDecoder::new(parts.idat.as_slice());
         if let Ok(decoded) = read_limited(&mut decoder) {
             let canonical = zlib_encode(&decoded)?;
