@@ -4,6 +4,7 @@ use pithos_engine_legacy::{CancellationToken, PackLimits, PackRequest};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
+use std::time::Instant;
 
 pub fn pack(request: PackRequest) -> Result<()> {
     pack_with_control(request, &CancellationToken::new())
@@ -52,6 +53,7 @@ pub fn pack_with_limits_and_control(
     let class_path = candidates.path().join("class-aware.pits");
     let global_path = candidates.path().join("global.pits");
 
+    let class_started = Instant::now();
     affinity_plan::with_mode(affinity_plan::PlannerMode::ClassAware, || {
         prescreen_pack::pack_with_limits_and_control(
             PackRequest {
@@ -63,8 +65,10 @@ pub fn pack_with_limits_and_control(
             cancellation,
         )
     })?;
+    let class_ms = class_started.elapsed().as_secs_f64() * 1000.0;
     checkpoint(cancellation)?;
 
+    let global_started = Instant::now();
     affinity_plan::with_mode(affinity_plan::PlannerMode::Global, || {
         prescreen_pack::pack_with_limits_and_control(
             PackRequest {
@@ -76,18 +80,40 @@ pub fn pack_with_limits_and_control(
             cancellation,
         )
     })?;
+    let global_ms = global_started.elapsed().as_secs_f64() * 1000.0;
     checkpoint(cancellation)?;
 
     let class_bytes = fs::metadata(&class_path)?.len();
     let global_bytes = fs::metadata(&global_path)?.len();
-    let winner = if global_bytes < class_bytes {
-        &global_path
+    let (winner_name, winner) = if global_bytes < class_bytes {
+        ("global", &global_path)
     } else {
-        &class_path
+        ("class-aware", &class_path)
     };
+
+    if representation_trace_enabled() {
+        eprintln!(
+            "PITHOS_REP_TRACE\tstage=archive_candidate\tcandidate=class-aware\tbytes={class_bytes}\tms={class_ms:.3}"
+        );
+        eprintln!(
+            "PITHOS_REP_TRACE\tstage=archive_candidate\tcandidate=global\tbytes={global_bytes}\tms={global_ms:.3}"
+        );
+        eprintln!(
+            "PITHOS_REP_TRACE\tstage=archive_winner\twinner={winner_name}\tbytes={}\tclass_bytes={class_bytes}\tglobal_bytes={global_bytes}\ttotal_candidate_ms={:.3}",
+            class_bytes.min(global_bytes),
+            class_ms + global_ms
+        );
+    }
+
     fs::rename(winner, &output)?;
     sync_parent(&output)?;
     Ok(())
+}
+
+fn representation_trace_enabled() -> bool {
+    std::env::var("PITHOS_REP_TRACE")
+        .ok()
+        .is_some_and(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
 }
 
 fn checkpoint(cancellation: &CancellationToken) -> Result<()> {
