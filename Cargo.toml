@@ -58,7 +58,7 @@ rand = "0.9"
 memmap2 = "0.9"
 zstd = "0.13"
 brotli = "7.0"
-liblzma = "0.3"
+liblzma = "0.4"
 flate2 = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 proptest = "1.5"
