@@ -110,7 +110,7 @@ pub fn encode_exact_dedup(
 
     if representation_trace_enabled() {
         eprintln!(
-            "PITHOS_REP_TRACE\tstage=representation_race\tinput_bytes={}\tmembers={}\tracing_mode={}\tv17_bytes={}\tv17_ms={:.3}\tv12_bytes={}\tv12_ms={:.3}\tprs1_bytes={}\tprs1_ms={:.3}\twinner={}",
+            "PITHOS_REP_TRACE\tstage=representation_race\tlevel={level}\tinput_bytes={}\tmembers={}\tracing_mode={}\tv17_bytes={}\tv17_ms={:.3}\tv12_bytes={}\tv12_ms={:.3}\tprs1_bytes={}\tprs1_ms={:.3}\twinner={}",
             input.len(),
             member_lengths.len(),
             race_mode,
@@ -123,9 +123,9 @@ pub fn encode_exact_dedup(
             winner
         );
         match &substrate {
-            Ok((_, stats)) => trace_substrate_stats(input.len(), stats),
+            Ok((_, stats)) => trace_substrate_stats(input.len(), level, stats),
             Err(error) => eprintln!(
-                "PITHOS_REP_TRACE\tstage=prs1_candidate_error\tinput_bytes={}\terror={}",
+                "PITHOS_REP_TRACE\tstage=prs1_candidate_error\tlevel={level}\tinput_bytes={}\terror={}",
                 input.len(),
                 error
             ),
@@ -235,9 +235,9 @@ fn validate_prs1_bounds(payload: &[u8], expected_len: u64) -> Result<()> {
     Ok(())
 }
 
-fn trace_substrate_stats(input_bytes: usize, stats: &SubstrateStats) {
+fn trace_substrate_stats(input_bytes: usize, level: i32, stats: &SubstrateStats) {
     eprintln!(
-        "PITHOS_REP_TRACE\tstage=prs1_summary\tinput_bytes={}\tencoded_bytes={}\tcells={}\traw={}\texact_ref={}\toverlay={}\toverlay_xor={}\tmixture={}\tmixture_combinadic={}\taxial={}\taxial_xor={}\taxial_even_odd={}\tdefect={}\tperiodic_defect={}\ttransition={}\tdelta_transition={}",
+        "PITHOS_REP_TRACE\tstage=prs1_summary\tlevel={level}\tinput_bytes={}\tencoded_bytes={}\tcells={}\traw={}\texact_ref={}\toverlay={}\toverlay_xor={}\tmixture={}\tmixture_combinadic={}\taxial={}\taxial_xor={}\taxial_even_odd={}\tdefect={}\tperiodic_defect={}\ttransition={}\tdelta_transition={}",
         input_bytes,
         stats.encoded_bytes,
         stats.cell_count,
