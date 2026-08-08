@@ -1,4 +1,4 @@
-use crate::{native_archive, native_verify};
+use crate::{native_archive, parallel_archive};
 use pithos_core::{DecodeLimits, Result};
 use pithos_engine_legacy::{
     ArchiveEntryKind, ArchiveEntrySummary, ArchiveInspection, CancellationToken, UnpackRequest,
@@ -35,7 +35,7 @@ pub fn verify_with_control(
     cancellation: &CancellationToken,
 ) -> Result<VerificationReport> {
     if requires_native_reader(archive) {
-        native_verify::verify_with_control(archive, limits, cancellation)
+        parallel_archive::verify_with_control(archive, limits, cancellation)
     } else {
         pithos_engine_legacy::verify_with_control(archive, limits, cancellation)
     }
@@ -106,7 +106,7 @@ pub fn unpack_with_control_and_temp_limit(
     cancellation: &CancellationToken,
 ) -> Result<()> {
     if requires_native_reader(&request.archive) {
-        native_archive::unpack_with_control_and_temp_limit(
+        parallel_archive::unpack_with_control_and_temp_limit(
             request,
             limits,
             max_temp_bytes,
