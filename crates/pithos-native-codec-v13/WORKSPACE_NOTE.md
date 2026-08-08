@@ -1,0 +1,1 @@
+This crate is integrated by the R3 branch stack and is not intended to remain standalone.
