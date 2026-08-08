@@ -12,7 +12,6 @@ use std::collections::BTreeMap;
 pub const NATIVE_CODEC_ID: u16 = pithos_native_v10::NATIVE_CODEC_ID;
 pub const NATIVE_CODEC_VERSION: u16 = pithos_native_v10::NATIVE_CODEC_VERSION;
 const MAGIC: &[u8; 4] = b"PCL0";
-const HEADER_LEN: usize = 24;
 const MAX_CLUSTERS: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
