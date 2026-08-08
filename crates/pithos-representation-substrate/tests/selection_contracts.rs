@@ -30,6 +30,19 @@ fn deterministic_bytes(len: usize, seed: u64) -> Vec<u8> {
     out
 }
 
+fn same_coarse_fingerprint_bytes(len: usize, seed: u64) -> Vec<u8> {
+    let mut state = seed.max(1);
+    let mut out = Vec::with_capacity(len);
+    for index in 0..len {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        let high = ((index % 16) as u8) << 4;
+        out.push(high | (state as u8 & 0x0f));
+    }
+    out
+}
+
 #[test]
 fn exact_reference_survives_real_candidate_selection() {
     let base = deterministic_bytes(32 * 1024, 0x243f_6a88_85a3_08d3);
@@ -54,15 +67,16 @@ fn sparse_xor_overlay_survives_real_candidate_selection() {
 
 #[test]
 fn global_template_anchor_survives_beyond_recent_window() {
-    let base = deterministic_bytes(32 * 1024, 0x7f4a_7c15_9e37_79b9);
+    let base = same_coarse_fingerprint_bytes(32 * 1024, 0x7f4a_7c15_9e37_79b9);
     let mut members = Vec::new();
     members.push(base.clone());
 
-    // Uniform-looking deterministic fillers have the same coarse high-nibble
-    // fingerprint and the same length, so they intentionally evict `base` from
-    // both bounded recent windows in the current implementation.
+    // Every filler has the exact same high-nibble histogram and length as the
+    // base while its low nibbles are unrelated. They therefore share the coarse
+    // fingerprint and deterministically evict `base` from both 16-entry recent
+    // windows without accidentally becoming sparse overlays themselves.
     for index in 0..20_u64 {
-        members.push(deterministic_bytes(
+        members.push(same_coarse_fingerprint_bytes(
             32 * 1024,
             0xd1b5_4a32_d192_ed03_u64.wrapping_add(index * 0x9e37),
         ));
@@ -70,7 +84,7 @@ fn global_template_anchor_survives_beyond_recent_window() {
 
     let mut near_copy = base;
     for position in (101..near_copy.len()).step_by(4093) {
-        near_copy[position] ^= 0x5a;
+        near_copy[position] ^= 0x05;
     }
     members.push(near_copy);
 
