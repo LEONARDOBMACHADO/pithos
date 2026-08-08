@@ -95,15 +95,19 @@ pub fn encode_exact_dedup(
         encoded_streams.push(encoded);
     }
 
-    let stream_count = u16::try_from(descriptors.len())
-        .map_err(|_| PithosError::IntegerOverflow)?;
+    let stream_count =
+        u16::try_from(descriptors.len()).map_err(|_| PithosError::IntegerOverflow)?;
     let descriptor_bytes = descriptors
         .len()
         .checked_mul(DESCRIPTOR_LEN)
         .ok_or(PithosError::IntegerOverflow)?;
-    let encoded_body = encoded_streams.iter().try_fold(reference_encoded.len(), |total, stream| {
-        total.checked_add(stream.len()).ok_or(PithosError::IntegerOverflow)
-    })?;
+    let encoded_body = encoded_streams
+        .iter()
+        .try_fold(reference_encoded.len(), |total, stream| {
+            total
+                .checked_add(stream.len())
+                .ok_or(PithosError::IntegerOverflow)
+        })?;
     let capacity = HEADER_LEN
         .checked_add(descriptor_bytes)
         .and_then(|value| value.checked_add(encoded_body))
@@ -162,12 +166,19 @@ pub fn decode_exact_dedup(payload: &[u8], expected_len: u64) -> Result<Vec<u8>> 
     if version != NATIVE_CODEC_VERSION || original_len != expected_len || reserved != 0 {
         return Err(PithosError::InvalidMetadata("native v14 header"));
     }
-    if chunk_count > MAX_NATIVE_CHUNKS || canonical_count > chunk_count || stream_count > CLASS_COUNT {
+    if chunk_count > MAX_NATIVE_CHUNKS
+        || canonical_count > chunk_count
+        || stream_count > CLASS_COUNT
+    {
         return Err(PithosError::ResourceLimit("native v14 counts"));
     }
 
     let descriptors_end = HEADER_LEN
-        .checked_add(stream_count.checked_mul(DESCRIPTOR_LEN).ok_or(PithosError::IntegerOverflow)?)
+        .checked_add(
+            stream_count
+                .checked_mul(DESCRIPTOR_LEN)
+                .ok_or(PithosError::IntegerOverflow)?,
+        )
         .ok_or(PithosError::IntegerOverflow)?;
     if descriptors_end > payload.len() {
         return Err(PithosError::InvalidRange);
@@ -176,13 +187,17 @@ pub fn decode_exact_dedup(payload: &[u8], expected_len: u64) -> Result<Vec<u8>> 
     let mut cursor = HEADER_LEN;
     for _ in 0..stream_count {
         let class_id = *payload.get(cursor).ok_or(PithosError::InvalidRange)?;
-        let codec_id = codec_from_u16(u16::from(*payload.get(cursor + 1).ok_or(PithosError::InvalidRange)?))?;
+        let codec_id = codec_from_u16(u16::from(
+            *payload.get(cursor + 1).ok_or(PithosError::InvalidRange)?,
+        ))?;
         let reserved = read_u16(payload, cursor + 2)?;
         let item_count = read_u32(payload, cursor + 4)?;
         let raw_len = read_u64(payload, cursor + 8)?;
         let encoded_len = read_u64(payload, cursor + 16)?;
         if class_id as usize >= CLASS_COUNT || reserved != 0 {
-            return Err(PithosError::InvalidMetadata("native v14 stream descriptor"));
+            return Err(PithosError::InvalidMetadata(
+                "native v14 stream descriptor",
+            ));
         }
         descriptors.push(StreamDescriptor {
             class_id,
@@ -197,17 +212,28 @@ pub fn decode_exact_dedup(payload: &[u8], expected_len: u64) -> Result<Vec<u8>> 
     let ref_end = cursor
         .checked_add(reference_encoded_len)
         .ok_or(PithosError::IntegerOverflow)?;
-    let reference_encoded = payload.get(cursor..ref_end).ok_or(PithosError::InvalidRange)?;
-    let reference_raw = decode_stream(reference_codec, reference_encoded, reference_raw_len as u64)?;
+    let reference_encoded = payload
+        .get(cursor..ref_end)
+        .ok_or(PithosError::InvalidRange)?;
+    let reference_raw = decode_stream(
+        reference_codec,
+        reference_encoded,
+        reference_raw_len as u64,
+    )?;
     let sequence = decode_reference_stream(&reference_raw, chunk_count)?;
     cursor = ref_end;
 
     let mut canonical: Vec<Option<Vec<u8>>> = (0..canonical_count).map(|_| None).collect();
     let mut filled = 0usize;
     for descriptor in descriptors {
-        let encoded_len = usize::try_from(descriptor.encoded_len).map_err(|_| PithosError::MemoryLimit)?;
-        let end = cursor.checked_add(encoded_len).ok_or(PithosError::IntegerOverflow)?;
-        let encoded = payload.get(cursor..end).ok_or(PithosError::InvalidRange)?;
+        let encoded_len = usize::try_from(descriptor.encoded_len)
+            .map_err(|_| PithosError::MemoryLimit)?;
+        let end = cursor
+            .checked_add(encoded_len)
+            .ok_or(PithosError::IntegerOverflow)?;
+        let encoded = payload
+            .get(cursor..end)
+            .ok_or(PithosError::InvalidRange)?;
         let raw = decode_stream(descriptor.codec_id, encoded, descriptor.raw_len)?;
         let mut raw_cursor = 0usize;
         for _ in 0..descriptor.item_count {
@@ -215,26 +241,39 @@ pub fn decode_exact_dedup(payload: &[u8], expected_len: u64) -> Result<Vec<u8>> 
                 .map_err(|_| PithosError::IntegerOverflow)?;
             let length = usize::try_from(read_varint(&raw, &mut raw_cursor)?)
                 .map_err(|_| PithosError::MemoryLimit)?;
-            let item_end = raw_cursor.checked_add(length).ok_or(PithosError::IntegerOverflow)?;
-            let bytes = raw.get(raw_cursor..item_end).ok_or(PithosError::InvalidRange)?;
-            let slot = canonical.get_mut(index).ok_or(PithosError::InvalidMetadata("native canonical index"))?;
+            let item_end = raw_cursor
+                .checked_add(length)
+                .ok_or(PithosError::IntegerOverflow)?;
+            let bytes = raw
+                .get(raw_cursor..item_end)
+                .ok_or(PithosError::InvalidRange)?;
+            let slot = canonical
+                .get_mut(index)
+                .ok_or(PithosError::InvalidMetadata("native canonical index"))?;
             if slot.is_some() {
-                return Err(PithosError::InvalidMetadata("duplicate native canonical index"));
+                return Err(PithosError::InvalidMetadata(
+                    "duplicate native canonical index",
+                ));
             }
             *slot = Some(bytes.to_vec());
             filled += 1;
             raw_cursor = item_end;
         }
         if raw_cursor != raw.len() {
-            return Err(PithosError::InvalidMetadata("native v14 trailing class bytes"));
+            return Err(PithosError::InvalidMetadata(
+                "native v14 trailing class bytes",
+            ));
         }
         cursor = end;
     }
     if cursor != payload.len() || filled != canonical_count {
-        return Err(PithosError::InvalidMetadata("native v14 stream coverage"));
+        return Err(PithosError::InvalidMetadata(
+            "native v14 stream coverage",
+        ));
     }
 
-    let expected_len_usize = usize::try_from(expected_len).map_err(|_| PithosError::MemoryLimit)?;
+    let expected_len_usize =
+        usize::try_from(expected_len).map_err(|_| PithosError::MemoryLimit)?;
     let mut output = Vec::with_capacity(expected_len_usize);
     for index in sequence {
         let bytes = canonical
@@ -256,7 +295,10 @@ pub fn decode_exact_dedup(payload: &[u8], expected_len: u64) -> Result<Vec<u8>> 
     Ok(output)
 }
 
-fn canonicalize(input: &[u8], member_lengths: &[u64]) -> Result<(Vec<Vec<u8>>, Vec<u32>, u64)> {
+fn canonicalize(
+    input: &[u8],
+    member_lengths: &[u64],
+) -> Result<(Vec<Vec<u8>>, Vec<u32>, u64)> {
     let config = ChunkingConfig::default();
     let mut canonical = Vec::<Vec<u8>>::new();
     let mut candidates = HashMap::<[u8; 32], Vec<u32>>::new();
@@ -265,8 +307,11 @@ fn canonicalize(input: &[u8], member_lengths: &[u64]) -> Result<(Vec<Vec<u8>>, V
     let mut member_base = 0_u64;
     for (member_id, member_length) in member_lengths.iter().copied().enumerate() {
         let start = usize::try_from(member_base).map_err(|_| PithosError::IntegerOverflow)?;
-        let member_len = usize::try_from(member_length).map_err(|_| PithosError::IntegerOverflow)?;
-        let end = start.checked_add(member_len).ok_or(PithosError::IntegerOverflow)?;
+        let member_len =
+            usize::try_from(member_length).map_err(|_| PithosError::IntegerOverflow)?;
+        let end = start
+            .checked_add(member_len)
+            .ok_or(PithosError::IntegerOverflow)?;
         let member = input.get(start..end).ok_or(PithosError::InvalidRange)?;
         let drafts = chunk_fastcdc(
             member,
@@ -281,9 +326,14 @@ fn canonicalize(input: &[u8], member_lengths: &[u64]) -> Result<(Vec<Vec<u8>>, V
             if sequence.len() >= MAX_NATIVE_CHUNKS {
                 return Err(PithosError::ResourceLimit("native chunk count"));
             }
-            let chunk_start = usize::try_from(draft.logical_offset).map_err(|_| PithosError::IntegerOverflow)?;
-            let chunk_end = chunk_start.checked_add(draft.length as usize).ok_or(PithosError::IntegerOverflow)?;
-            let bytes = input.get(chunk_start..chunk_end).ok_or(PithosError::InvalidRange)?;
+            let chunk_start = usize::try_from(draft.logical_offset)
+                .map_err(|_| PithosError::IntegerOverflow)?;
+            let chunk_end = chunk_start
+                .checked_add(draft.length as usize)
+                .ok_or(PithosError::IntegerOverflow)?;
+            let bytes = input
+                .get(chunk_start..chunk_end)
+                .ok_or(PithosError::InvalidRange)?;
             let hash = *blake3::hash(bytes).as_bytes();
             let mut found = None;
             if let Some(indexes) = candidates.get(&hash) {
@@ -300,8 +350,9 @@ fn canonicalize(input: &[u8], member_lengths: &[u64]) -> Result<(Vec<Vec<u8>>, V
             let index = match found {
                 Some(index) => index,
                 None => {
-                    let index = u32::try_from(canonical.len())
-                        .map_err(|_| PithosError::ResourceLimit("native canonical chunks"))?;
+                    let index = u32::try_from(canonical.len()).map_err(|_| {
+                        PithosError::ResourceLimit("native canonical chunks")
+                    })?;
                     canonical.push(bytes.to_vec());
                     candidates.entry(hash).or_default().push(index);
                     index
@@ -309,7 +360,9 @@ fn canonicalize(input: &[u8], member_lengths: &[u64]) -> Result<(Vec<Vec<u8>>, V
             };
             sequence.push(index);
         }
-        member_base = member_base.checked_add(member_length).ok_or(PithosError::IntegerOverflow)?;
+        member_base = member_base
+            .checked_add(member_length)
+            .ok_or(PithosError::IntegerOverflow)?;
     }
     Ok((canonical, sequence, gross_duplicate_bytes))
 }
@@ -318,10 +371,18 @@ fn classify(bytes: &[u8]) -> u8 {
     if bytes.is_empty() {
         return 0;
     }
-    if bytes.starts_with(b"\x89PNG") || bytes.starts_with(b"\xff\xd8\xff") || bytes.starts_with(b"GIF8") || bytes.starts_with(b"RIFF") {
+    if bytes.starts_with(b"\x89PNG")
+        || bytes.starts_with(b"\xff\xd8\xff")
+        || bytes.starts_with(b"GIF8")
+        || bytes.starts_with(b"RIFF")
+    {
         return 5;
     }
-    if bytes.starts_with(b"PK\x03\x04") || bytes.starts_with(b"\x1f\x8b") || bytes.starts_with(b"7z\xbc\xaf\x27\x1c") || bytes.starts_with(b"\xfd7zXZ") {
+    if bytes.starts_with(b"PK\x03\x04")
+        || bytes.starts_with(b"\x1f\x8b")
+        || bytes.starts_with(b"7z\xbc\xaf\x27\x1c")
+        || bytes.starts_with(b"\xfd7zXZ")
+    {
         return 4;
     }
     let sample = &bytes[..bytes.len().min(4096)];
@@ -330,7 +391,10 @@ fn classify(bytes: &[u8]) -> u8 {
         .filter(|byte| matches!(**byte, b'\n' | b'\r' | b'\t' | 0x20..=0x7e))
         .count();
     if printable.saturating_mul(100) >= sample.len().saturating_mul(90) {
-        let first = sample.iter().copied().find(|byte| !byte.is_ascii_whitespace());
+        let first = sample
+            .iter()
+            .copied()
+            .find(|byte| !byte.is_ascii_whitespace());
         if matches!(first, Some(b'{') | Some(b'[') | Some(b'<')) {
             return 2;
         }
@@ -362,7 +426,11 @@ fn encode_best(raw: &[u8], level: i32) -> Result<(CodecId, Vec<u8>)> {
     if raw.len() < 256 {
         return Ok((CodecId::Store, raw.to_vec()));
     }
-    let zstd_level = if level >= ARCHIVE_MAX_NATIVE_LEVEL { 19 } else { level.clamp(1, 19) };
+    let zstd_level = if level >= ARCHIVE_MAX_NATIVE_LEVEL {
+        19
+    } else {
+        level.clamp(1, 19)
+    };
     let (zstd, lzma) = std::thread::scope(|scope| {
         let zstd = scope.spawn(|| encode_with(CodecId::Zstd, zstd_level, raw));
         let lzma = scope.spawn(|| encode_with(CodecId::Lzma2, 9, raw));
@@ -429,7 +497,9 @@ fn decode_reference_stream(bytes: &[u8], expected: usize) -> Result<Vec<u32>> {
     while cursor < bytes.len() && output.len() < expected {
         let token = read_varint(bytes, &mut cursor)?;
         if token & 1 == 0 {
-            output.push(u32::try_from(token >> 1).map_err(|_| PithosError::IntegerOverflow)?);
+            output.push(
+                u32::try_from(token >> 1).map_err(|_| PithosError::IntegerOverflow)?,
+            );
         } else {
             let run = usize::try_from(token >> 1).map_err(|_| PithosError::IntegerOverflow)?;
             if run < 3 || output.len().saturating_add(run) > expected {
@@ -465,7 +535,9 @@ fn read_varint(bytes: &[u8], cursor: &mut usize) -> Result<u64> {
     let mut shift = 0_u32;
     for _ in 0..10 {
         let byte = *bytes.get(*cursor).ok_or(PithosError::InvalidRange)?;
-        *cursor = cursor.checked_add(1).ok_or(PithosError::IntegerOverflow)?;
+        *cursor = cursor
+            .checked_add(1)
+            .ok_or(PithosError::IntegerOverflow)?;
         value |= u64::from(byte & 0x7f) << shift;
         if byte & 0x80 == 0 {
             return Ok(value);
@@ -496,7 +568,9 @@ fn validate_members(input_len: usize, member_lengths: &[u64]) -> Result<()> {
         return Err(PithosError::InvalidMetadata("native member boundaries"));
     }
     let total = member_lengths.iter().try_fold(0_u64, |total, length| {
-        total.checked_add(*length).ok_or(PithosError::IntegerOverflow)
+        total
+            .checked_add(*length)
+            .ok_or(PithosError::IntegerOverflow)
     })?;
     if total != input_len as u64 {
         return Err(PithosError::InvalidMetadata("native member boundaries"));
@@ -505,15 +579,23 @@ fn validate_members(input_len: usize, member_lengths: &[u64]) -> Result<()> {
 }
 
 fn read_u16(bytes: &[u8], offset: usize) -> Result<u16> {
-    let slice = bytes.get(offset..offset + 2).ok_or(PithosError::InvalidRange)?;
+    let slice = bytes
+        .get(offset..offset + 2)
+        .ok_or(PithosError::InvalidRange)?;
     Ok(u16::from_le_bytes([slice[0], slice[1]]))
 }
 fn read_u32(bytes: &[u8], offset: usize) -> Result<u32> {
-    let slice = bytes.get(offset..offset + 4).ok_or(PithosError::InvalidRange)?;
-    Ok(u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
+    let slice = bytes
+        .get(offset..offset + 4)
+        .ok_or(PithosError::InvalidRange)?;
+    Ok(u32::from_le_bytes([
+        slice[0], slice[1], slice[2], slice[3],
+    ]))
 }
 fn read_u64(bytes: &[u8], offset: usize) -> Result<u64> {
-    let slice = bytes.get(offset..offset + 8).ok_or(PithosError::InvalidRange)?;
+    let slice = bytes
+        .get(offset..offset + 8)
+        .ok_or(PithosError::InvalidRange)?;
     Ok(u64::from_le_bytes([
         slice[0], slice[1], slice[2], slice[3], slice[4], slice[5], slice[6], slice[7],
     ]))
@@ -525,14 +607,33 @@ mod tests {
 
     #[test]
     fn global_pool_roundtrips_across_mixed_members() {
+        // v14 is exact chunk deduplication. Identical members are chunked from
+        // the same local origin and therefore must share canonical chunks even
+        // when unrelated text/binary members sit between them in the archive.
+        // Shifted/embedded repetitions after different prefixes are handled by
+        // the later implicit-global-reference transform rather than being an
+        // invariant of FastCDC chunk boundaries.
+        let text = b"{\"kind\":\"text\"}\n".repeat(32 * 1024);
+        let binary = vec![0, 1, 2, 3].repeat(64 * 1024);
         let shared = b"shared-global-pool-block".repeat(64 * 1024);
-        let text = [b"{\"kind\":\"text\"}\n".repeat(32 * 1024), shared.clone()].concat();
-        let binary = [vec![0, 1, 2, 3].repeat(64 * 1024), shared.clone()].concat();
+
         let mut input = text.clone();
+        input.extend_from_slice(&shared);
         input.extend_from_slice(&binary);
-        let lengths = [text.len() as u64, binary.len() as u64];
+        input.extend_from_slice(&shared);
+        let lengths = [
+            text.len() as u64,
+            shared.len() as u64,
+            binary.len() as u64,
+            shared.len() as u64,
+        ];
+
         let (payload, stats) = encode_exact_dedup(&input, &lengths, 15).unwrap();
         assert!(stats.gross_duplicate_bytes > 0);
-        assert_eq!(decode_exact_dedup(&payload, input.len() as u64).unwrap(), input);
+        assert!(stats.canonical_chunks < stats.chunk_count);
+        assert_eq!(
+            decode_exact_dedup(&payload, input.len() as u64).unwrap(),
+            input
+        );
     }
 }
