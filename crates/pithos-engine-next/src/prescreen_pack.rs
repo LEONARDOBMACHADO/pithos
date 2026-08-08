@@ -1,5 +1,4 @@
-use crate::archive_affinity;
-use crate::dedup_probe;
+use crate::{affinity_plan, archive_affinity, dedup_probe};
 use crate::native_archive::{self, RegistryEntry, encode_registry, read_catalog};
 use pithos_codecs::{BrotliCodec, Codec, CodecConfig, CodecId, Lzma2Codec, StoreCodec, ZstdCodec};
 use pithos_core::{CompressionProfile, DecodeLimits, PithosError, Result};
@@ -11,7 +10,7 @@ use pithos_format::{
 };
 use pithos_io::{atomic_commit, create_atomic_spool};
 use pithos_native_codec::{NATIVE_CODEC_ID, NATIVE_CODEC_VERSION, encode_exact_dedup};
-use pithos_planner::{SolidGroupPlan, plan_solid_groups};
+use pithos_planner::{SolidGroupPlan, plan_solid_groups, solid_group_target};
 use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
@@ -130,7 +129,15 @@ pub fn pack_with_limits_and_control(
         .iter()
         .map(|source| source.bytes.len() as u64)
         .collect::<Vec<_>>();
-    let plans = plan_solid_groups(profile, &lengths)?;
+    let plans = if profile == CompressionProfile::ArchiveMax {
+        let classes = sources
+            .iter()
+            .map(|source| archive_affinity::classify(&source.bytes))
+            .collect::<Vec<_>>();
+        affinity_plan::plan(&classes, &lengths, solid_group_target(profile))?
+    } else {
+        plan_solid_groups(profile, &lengths)?
+    };
     let mut entries = raw_catalog.entries;
     let mut restore_map = Vec::with_capacity(sources.len());
     for (group_id, plan) in plans.iter().enumerate() {
