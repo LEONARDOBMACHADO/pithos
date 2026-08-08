@@ -28,8 +28,7 @@ pub fn encode_exact_dedup(
     let (current_result, floor_result) = std::thread::scope(|scope| {
         let current = scope.spawn(|| {
             let started = Instant::now();
-            let result =
-                pithos_native_current::encode_exact_dedup(input, member_lengths, level);
+            let result = pithos_native_current::encode_exact_dedup(input, member_lengths, level);
             (result, started.elapsed().as_secs_f64() * 1000.0)
         });
         let floor = scope.spawn(|| {
@@ -94,9 +93,12 @@ pub fn decode_exact_dedup(payload: &[u8], expected_len: u64) -> Result<Vec<u8>> 
 }
 
 fn representation_trace_enabled() -> bool {
-    std::env::var("PITHOS_REP_TRACE")
-        .ok()
-        .is_some_and(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+    std::env::var("PITHOS_REP_TRACE").ok().is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
 }
 
 #[cfg(test)]
