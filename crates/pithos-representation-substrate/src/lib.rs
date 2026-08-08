@@ -170,6 +170,8 @@ pub fn encode(
     let mut exact = HashMap::<[u8; 32], usize>::new();
     let mut coarse = HashMap::<u64, VecDeque<usize>>::new();
     let mut same_length = HashMap::<usize, VecDeque<usize>>::new();
+    let mut coarse_anchor = HashMap::<u64, usize>::new();
+    let mut same_length_anchor = HashMap::<usize, usize>::new();
 
     for (index, range) in cells.iter().copied().enumerate() {
         let end = range
@@ -187,14 +189,19 @@ pub fn encode(
             &exact,
             &coarse,
             &same_length,
+            &coarse_anchor,
+            &same_length_anchor,
         )?;
         write_varint(range.len as u64, &mut planes.descriptor);
         apply_candidate(candidate, bytes, &mut planes, &mut stats);
 
         let hash = *blake3::hash(bytes).as_bytes();
         exact.entry(hash).or_insert(index);
+        let fingerprint = coarse_fingerprint(bytes);
+        coarse_anchor.entry(fingerprint).or_insert(index);
+        same_length_anchor.entry(range.len).or_insert(index);
         push_window(
-            coarse.entry(coarse_fingerprint(bytes)).or_default(),
+            coarse.entry(fingerprint).or_default(),
             index,
             TEMPLATE_WINDOW,
         );
@@ -593,9 +600,10 @@ fn partition_range(
 }
 
 fn best_split(bytes: &[u8]) -> Option<usize> {
-    if bytes.len() < SPLIT_EVALUATION_MIN_BYTES || has_strong_single_model(bytes) {
+    if bytes.len() < SPLIT_EVALUATION_MIN_BYTES {
         return None;
     }
+    let strong_single_model = has_strong_single_model(bytes);
     let whole = intrinsic_cost_estimate(bytes);
     let raw_points = [bytes.len() / 4, bytes.len() / 2, bytes.len() * 3 / 4];
     let mut best = None::<(usize, usize)>;
@@ -612,7 +620,11 @@ fn best_split(bytes: &[u8]) -> Option<usize> {
         }
     }
     let (split, split_cost) = best?;
-    let required_gain = (whole / 200).max(64);
+    let required_gain = if strong_single_model {
+        (whole / 100).max(128)
+    } else {
+        (whole / 200).max(64)
+    };
     if split_cost.saturating_add(required_gain) < whole {
         Some(split)
     } else {
@@ -698,6 +710,8 @@ fn choose_candidate(
     exact: &HashMap<[u8; 32], usize>,
     coarse: &HashMap<u64, VecDeque<usize>>,
     same_length: &HashMap<usize, VecDeque<usize>>,
+    coarse_anchor: &HashMap<u64, usize>,
+    same_length_anchor: &HashMap<usize, usize>,
 ) -> Result<Candidate> {
     let hash = *blake3::hash(bytes).as_bytes();
     if let Some(base) = exact.get(&hash).copied() {
@@ -721,8 +735,20 @@ fn choose_candidate(
         candidate: Candidate::Raw,
     };
 
-    let mut template_bases = Vec::with_capacity(TEMPLATE_WINDOW + SAME_LENGTH_TEMPLATE_WINDOW);
-    if let Some(queue) = coarse.get(&coarse_fingerprint(bytes)) {
+    let mut template_bases =
+        Vec::with_capacity(TEMPLATE_WINDOW + SAME_LENGTH_TEMPLATE_WINDOW + 2);
+    let fingerprint = coarse_fingerprint(bytes);
+    if let Some(base) = coarse_anchor.get(&fingerprint).copied() {
+        if base < index {
+            template_bases.push(base);
+        }
+    }
+    if let Some(base) = same_length_anchor.get(&bytes.len()).copied() {
+        if base < index && !template_bases.contains(&base) {
+            template_bases.push(base);
+        }
+    }
+    if let Some(queue) = coarse.get(&fingerprint) {
         for base in queue.iter().copied().rev().take(TEMPLATE_WINDOW) {
             if base < index && !template_bases.contains(&base) {
                 template_bases.push(base);
@@ -1052,7 +1078,11 @@ fn encode_mixture(bytes: &[u8]) -> Option<(u8, Vec<u8>, u8, Vec<u8>)> {
     let bitpacked = pack_symbol_indexes(bytes, &index, bits);
     let (mode, payload) = if alphabet.len() == 2 {
         let combinadic = encode_binary_combinadic(bytes, &alphabet);
-        if combinadic.len() < bitpacked.len() {
+        let bitpacked_cost = entropy_estimate_bytes(&bitpacked)
+            .saturating_add(varint_len(bitpacked.len() as u64));
+        let combinadic_cost = entropy_estimate_bytes(&combinadic)
+            .saturating_add(varint_len(combinadic.len() as u64));
+        if combinadic_cost < bitpacked_cost {
             (MIXTURE_COMBINADIC, combinadic)
         } else {
             (MIXTURE_BITPACK, bitpacked)
@@ -1330,7 +1360,8 @@ fn encode_defects(bytes: &[u8]) -> Option<(Vec<u8>, usize, Vec<u8>)> {
     if bytes.len() < 64 {
         return None;
     }
-    let mut best = None::<(Vec<u8>, usize)>;
+
+    let mut best = None::<(Vec<u8>, usize, Vec<u8>, usize)>;
     for period in [1usize, 2, 4, 8] {
         if period > bytes.len() {
             continue;
@@ -1342,37 +1373,41 @@ fn encode_defects(bytes: &[u8]) -> Option<(Vec<u8>, usize, Vec<u8>)> {
             .enumerate()
             .filter(|(index, value)| *value == pattern[*index % period])
             .count();
-        if best
-            .as_ref()
-            .is_none_or(|(_, best_matches)| matches > *best_matches)
-        {
-            best = Some((pattern, matches));
-        }
-    }
-    let (pattern, matches) = best?;
-    if matches.saturating_mul(100) < bytes.len().saturating_mul(70) {
-        return None;
-    }
-
-    let period = pattern.len();
-    let mut payload = Vec::new();
-    let mut defects = 0usize;
-    let mut previous = None::<usize>;
-    for (position, byte) in bytes.iter().copied().enumerate() {
-        if byte == pattern[position % period] {
+        if matches.saturating_mul(100) < bytes.len().saturating_mul(70) {
             continue;
         }
-        let gap = previous.map_or(position, |value| position - value - 1);
-        write_varint(gap as u64, &mut payload);
-        payload.push(byte);
-        defects += 1;
-        previous = Some(position);
+
+        let mut payload = Vec::new();
+        let mut defects = 0usize;
+        let mut previous = None::<usize>;
+        for (position, byte) in bytes.iter().copied().enumerate() {
+            if byte == pattern[position % period] {
+                continue;
+            }
+            let gap = previous.map_or(position, |value| position - value - 1);
+            write_varint(gap as u64, &mut payload);
+            payload.push(byte);
+            defects += 1;
+            previous = Some(position);
+        }
+        if payload.len().saturating_add(pattern.len() + 10) >= bytes.len() {
+            continue;
+        }
+
+        let score = entropy_estimate_bytes(&payload)
+            .saturating_add(pattern.len())
+            .saturating_add(varint_len(defects as u64))
+            .saturating_add(varint_len(payload.len() as u64))
+            .saturating_add(3);
+        if best
+            .as_ref()
+            .is_none_or(|(_, _, _, best_score)| score < *best_score)
+        {
+            best = Some((pattern, defects, payload, score));
+        }
     }
-    if payload.len().saturating_add(pattern.len() + 10) >= bytes.len() {
-        None
-    } else {
-        Some((pattern, defects, payload))
-    }
+
+    best.map(|(pattern, defects, payload, _)| (pattern, defects, payload))
 }
 
 fn periodic_pattern(bytes: &[u8], period: usize) -> Vec<u8> {
