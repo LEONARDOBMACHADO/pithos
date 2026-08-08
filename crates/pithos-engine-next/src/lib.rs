@@ -11,6 +11,7 @@ mod adaptive_pack;
 mod affinity_plan;
 mod archive_affinity;
 mod compat_dispatch;
+#[cfg(feature = "legacy-experiments")]
 mod dedup_probe;
 #[cfg(feature = "legacy-experiments")]
 mod direct_pack;
