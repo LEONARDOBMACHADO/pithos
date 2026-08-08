@@ -1,0 +1,1 @@
+1. FastCDC each member with preserved boundaries. 2. BLAKE3 + byte equality canonicalizes exact chunks. 3. Reference indexes are encoded as LEB128; runs >=3 use a run token. 4. Canonical lengths are LEB128. 5. ArchiveMax races Zstd 19 and LZMA2 9 and stores only the smaller stream. 6. Decoder falls back to v12 for older payloads.
