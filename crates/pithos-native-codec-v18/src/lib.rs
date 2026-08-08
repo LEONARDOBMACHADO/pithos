@@ -13,8 +13,9 @@ pub const NATIVE_CODEC_ID: u16 = 4;
 pub const NATIVE_CODEC_VERSION: u16 = 18;
 
 // Three full representation candidates can each hold buffers comparable to the
-// input. Keep the three-way race for moderate groups, but serialize PRS1 after
-// the historical pair for large groups so ArchiveMax cannot multiply peak RAM.
+// input. Keep the three-way race for moderate groups when the machine can
+// actually execute three workers. Otherwise reduce the parallelism layer while
+// preserving exactly the same candidate set and final size arbitration.
 const PRS1_PARALLEL_MAX_INPUT_BYTES: usize = 128 * 1024 * 1024;
 const PRS1_HEADER_LEN: usize = 24;
 const PRS1_PLANE_RECORD_LEN: usize = 24;
@@ -36,18 +37,22 @@ pub fn encode_exact_dedup(
     member_lengths: &[u64],
     level: i32,
 ) -> Result<(Vec<u8>, NativeStats)> {
+    let workers = std::thread::available_parallelism()
+        .map(|value| value.get())
+        .unwrap_or(1);
+
     let (current, current_ms, floor, floor_ms, substrate, substrate_ms, race_mode) =
-        if input.len() <= PRS1_PARALLEL_MAX_INPUT_BYTES {
+        if workers >= 3 && input.len() <= PRS1_PARALLEL_MAX_INPUT_BYTES {
             let (current_result, floor_result, substrate_result) = std::thread::scope(|scope| {
-                let current = scope.spawn(|| timed(|| {
-                    pithos_native_current::encode_exact_dedup(input, member_lengths, level)
-                }));
-                let floor = scope.spawn(|| timed(|| {
-                    pithos_native_floor::encode_exact_dedup(input, member_lengths, level)
-                }));
-                let substrate = scope.spawn(|| timed(|| {
-                    pithos_representation_substrate::encode(input, member_lengths, level)
-                }));
+                let current = scope.spawn(|| {
+                    timed(|| pithos_native_current::encode_exact_dedup(input, member_lengths, level))
+                });
+                let floor = scope.spawn(|| {
+                    timed(|| pithos_native_floor::encode_exact_dedup(input, member_lengths, level))
+                });
+                let substrate = scope.spawn(|| {
+                    timed(|| pithos_representation_substrate::encode(input, member_lengths, level))
+                });
                 (current.join(), floor.join(), substrate.join())
             });
             let (current, current_ms) = current_result
@@ -63,25 +68,24 @@ pub fn encode_exact_dedup(
                 floor_ms,
                 substrate,
                 substrate_ms,
-                "parallel",
+                "three-way-parallel",
             )
-        } else {
+        } else if workers >= 2 {
             let (current_result, floor_result) = std::thread::scope(|scope| {
-                let current = scope.spawn(|| timed(|| {
-                    pithos_native_current::encode_exact_dedup(input, member_lengths, level)
-                }));
-                let floor = scope.spawn(|| timed(|| {
-                    pithos_native_floor::encode_exact_dedup(input, member_lengths, level)
-                }));
+                let current = scope.spawn(|| {
+                    timed(|| pithos_native_current::encode_exact_dedup(input, member_lengths, level))
+                });
+                let floor = scope.spawn(|| {
+                    timed(|| pithos_native_floor::encode_exact_dedup(input, member_lengths, level))
+                });
                 (current.join(), floor.join())
             });
             let (current, current_ms) = current_result
                 .map_err(|_| PithosError::InvalidMetadata("native current worker panic"))?;
             let (floor, floor_ms) = floor_result
                 .map_err(|_| PithosError::InvalidMetadata("native floor worker panic"))?;
-            let (substrate, substrate_ms) = timed(|| {
-                pithos_representation_substrate::encode(input, member_lengths, level)
-            });
+            let (substrate, substrate_ms) =
+                timed(|| pithos_representation_substrate::encode(input, member_lengths, level));
             (
                 current?,
                 current_ms,
@@ -89,7 +93,27 @@ pub fn encode_exact_dedup(
                 floor_ms,
                 substrate,
                 substrate_ms,
-                "bounded-sequential",
+                if input.len() <= PRS1_PARALLEL_MAX_INPUT_BYTES {
+                    "cpu-bounded-pair"
+                } else {
+                    "memory-bounded-pair"
+                },
+            )
+        } else {
+            let (current, current_ms) =
+                timed(|| pithos_native_current::encode_exact_dedup(input, member_lengths, level));
+            let (floor, floor_ms) =
+                timed(|| pithos_native_floor::encode_exact_dedup(input, member_lengths, level));
+            let (substrate, substrate_ms) =
+                timed(|| pithos_representation_substrate::encode(input, member_lengths, level));
+            (
+                current?,
+                current_ms,
+                floor?,
+                floor_ms,
+                substrate,
+                substrate_ms,
+                "sequential",
             )
         };
 
@@ -110,10 +134,11 @@ pub fn encode_exact_dedup(
 
     if representation_trace_enabled() {
         eprintln!(
-            "PITHOS_REP_TRACE\tstage=representation_race\tlevel={level}\tinput_bytes={}\tmembers={}\tracing_mode={}\tv17_bytes={}\tv17_ms={:.3}\tv12_bytes={}\tv12_ms={:.3}\tprs1_bytes={}\tprs1_ms={:.3}\twinner={}",
+            "PITHOS_REP_TRACE\tstage=representation_race\tlevel={level}\tinput_bytes={}\tmembers={}\tracing_mode={}\tworker_budget={}\tv17_bytes={}\tv17_ms={:.3}\tv12_bytes={}\tv12_ms={:.3}\tprs1_bytes={}\tprs1_ms={:.3}\twinner={}",
             input.len(),
             member_lengths.len(),
             race_mode,
+            workers,
             current_len,
             current_ms,
             floor_len,
