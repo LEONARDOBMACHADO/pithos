@@ -81,7 +81,8 @@ $codecExit = Invoke-PithosNativeProcess `
     )
 if ($codecExit -ne 0) { throw "codecbench failed with exit code $codecExit" }
 
-Write-Host "`n=== Compression benchmark: PITHOS ONLY ===" -ForegroundColor Cyan
+Write-Host "`n=== Compression benchmark: PITHOS ARCHIVE-MAX ONLY ===" -ForegroundColor Cyan
+Write-Host 'Balanced is intentionally skipped for R5 because PRS1 is an ArchiveMax experiment.' -ForegroundColor Yellow
 Write-Host '7-Zip is NOT executed. Comparison uses docs/benchmarks/7zip-best-baseline.csv.' -ForegroundColor Yellow
 $benchmarkExit = Invoke-PithosNativeProcess `
     -FilePath 'cargo' `
@@ -89,14 +90,18 @@ $benchmarkExit = Invoke-PithosNativeProcess `
         'run','--release','-p','pithos-bench','--bin','pithos-bench','--',
         '--corpus',$corpusPath,
         '--results',$resultsPath,
+        '--archive-max-only',
         '--pithos-only'
     )
-if ($benchmarkExit -ne 0) { throw "pithos-only benchmark failed with exit code $benchmarkExit" }
+if ($benchmarkExit -ne 0) { throw "archive-max-only pithos benchmark failed with exit code $benchmarkExit" }
 
 $benchmarkPath = Join-Path $resultsPath 'benchmark.csv'
 if (-not (Test-Path -LiteralPath $benchmarkPath -PathType Leaf)) { throw 'benchmark.csv not produced.' }
 $pithosRows = @(Import-Csv -LiteralPath $benchmarkPath | Where-Object { $_.compressor -eq 'pithos' -and $_.profile -eq 'archive-max' })
 if ($pithosRows.Count -eq 0) { throw 'No Pithos archive-max rows found.' }
+if (@(Import-Csv -LiteralPath $benchmarkPath | Where-Object { $_.compressor -eq 'pithos' -and $_.profile -ne 'archive-max' }).Count -ne 0) {
+    throw 'R5 benchmark unexpectedly produced non-ArchiveMax Pithos rows.'
+}
 
 function Parse-OptionalDouble([string]$Value) {
     if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
@@ -162,6 +167,7 @@ $summaryPath = Join-Path $resultsPath 'frozen-baseline-summary.txt'
     "timestamp_utc=$((Get-Date).ToUniversalTime().ToString('o'))",
     "branch=$branch",
     "commit=$sha",
+    'benchmark_profiles=archive-max-only',
     'native_process_failure_policy=EXIT_CODE_ONLY',
     "cases=$($comparison.Count)",
     "successful_cases=$($ok.Count)",
