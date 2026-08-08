@@ -1,0 +1,30 @@
+﻿[
+    {
+        "branch":  "feat/28-quaternary-context",
+        "commit":  "5564210bdd1f5bc845a0b474dec84475c5b155e5",
+        "compressor":  "pithos",
+        "profile":  "archive-max",
+        "original_bytes":  499318122,
+        "archive_bytes":  86153416,
+        "savings_percent":  82.745786,
+        "compress_ms":  1035364.677,
+        "verify_ms":  6708.783,
+        "decompress_ms":  10003.766,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    },
+    {
+        "branch":  "feat/28-quaternary-context",
+        "commit":  "5564210bdd1f5bc845a0b474dec84475c5b155e5",
+        "compressor":  "7zip",
+        "profile":  "lzma2-mx9-solid",
+        "original_bytes":  499318122,
+        "archive_bytes":  86352020,
+        "savings_percent":  82.706011,
+        "compress_ms":  160349.833,
+        "verify_ms":  27916.017,
+        "decompress_ms":  31197.789,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    }
+]

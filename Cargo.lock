@@ -656,8 +656,9 @@ dependencies = [
  "pithos-engine",
  "pithos-format",
  "pithos-io",
- "pithos-native-codec-v12",
+ "pithos-native-codec-v17",
  "pithos-planner",
+ "rayon",
  "serde",
  "serde_json",
  "tempfile",
@@ -730,6 +731,55 @@ dependencies = [
  "pithos-codecs",
  "pithos-core",
  "pithos-native-codec-v11",
+]
+
+[[package]]
+name = "pithos-native-codec-v13"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "pithos-analysis",
+ "pithos-codecs",
+ "pithos-core",
+ "pithos-native-codec-v12",
+]
+
+[[package]]
+name = "pithos-native-codec-v14"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "pithos-analysis",
+ "pithos-codecs",
+ "pithos-core",
+ "pithos-native-codec-v13",
+]
+
+[[package]]
+name = "pithos-native-codec-v15"
+version = "0.1.0"
+dependencies = [
+ "pithos-core",
+ "pithos-native-codec-v14",
+]
+
+[[package]]
+name = "pithos-native-codec-v16"
+version = "0.1.0"
+dependencies = [
+ "pithos-core",
+ "pithos-native-codec-v14",
+ "pithos-native-codec-v15",
+ "xxhash-rust",
+]
+
+[[package]]
+name = "pithos-native-codec-v17"
+version = "0.1.0"
+dependencies = [
+ "pithos-core",
+ "pithos-native-codec-v14",
+ "pithos-native-codec-v16",
 ]
 
 [[package]]

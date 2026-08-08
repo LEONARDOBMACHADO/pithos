@@ -1,0 +1,3 @@
+﻿"branch","commit","compressor","profile","original_bytes","archive_bytes","savings_percent","compress_ms","verify_ms","decompress_ms","tree_sha256","status"
+"feat/28-quaternary-context","5564210bdd1f5bc845a0b474dec84475c5b155e5","pithos","archive-max","499318122","86153416","82.745786","1035364.677","6708.783","10003.766","469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4","ok"
+"feat/28-quaternary-context","5564210bdd1f5bc845a0b474dec84475c5b155e5","7zip","lzma2-mx9-solid","499318122","86352020","82.706011","160349.833","27916.017","31197.789","469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4","ok"
