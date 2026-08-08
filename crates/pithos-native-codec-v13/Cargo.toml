@@ -1,0 +1,13 @@
+[package]
+name = "pithos-native-codec-v13"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+pithos-core = { path = "../pithos-core" }
+pithos-analysis = { path = "../pithos-analysis" }
+pithos-codecs = { path = "../pithos-codecs" }
+pithos-native-v12 = { package = "pithos-native-codec-v12", path = "../pithos-native-codec-v12" }
+blake3.workspace = true
