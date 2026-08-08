@@ -78,15 +78,29 @@ if ($unexpected.Count -gt 0) {
 }
 
 Write-Host '=== PRS1 R5 NATIVE STDERR CONTRACT ===' -ForegroundColor Cyan
-$stderrProbe = Join-Path $env:TEMP "pithos-r5-stderr-probe-$PID.log"
+$unsafeInlineRejected = $false
 try {
-    $stderrProbeExit = Invoke-PithosNativeProcess `
+    Invoke-PithosNativeProcess `
         -FilePath 'powershell' `
-        -Arguments @(
-            '-NoProfile',
-            '-Command',
-            '[Console]::Error.WriteLine("R5_STDERR_PROBE"); exit 0'
-        ) `
+        -Arguments @('-NoProfile','-Command','exit 0') `
+        -DiscardOutput | Out-Null
+} catch {
+    if ($_.Exception.Message -like 'Unsafe native PowerShell -Command invocation rejected.*') {
+        $unsafeInlineRejected = $true
+    } else {
+        throw
+    }
+}
+if (-not $unsafeInlineRejected) {
+    throw 'Unsafe native PowerShell -Command contract was not enforced.'
+}
+Write-Host 'R5 INLINE POWERSHELL CONTRACT: PASS (-Command rejected)' -ForegroundColor Green
+
+$stderrProbe = Join-Path $env:TEMP "pithos-r5-stderr-probe-$PID.log"
+$stderrProbeScript = '[Console]::Error.WriteLine("R5_STDERR_PROBE"); exit 0'
+try {
+    $stderrProbeExit = Invoke-PithosNativePowerShellEncoded `
+        -ScriptText $stderrProbeScript `
         -LogPath $stderrProbe
     if ($stderrProbeExit -ne 0) {
         throw "R5 stderr probe returned exit code $stderrProbeExit"
@@ -94,7 +108,7 @@ try {
     if (-not (Select-String -LiteralPath $stderrProbe -SimpleMatch 'R5_STDERR_PROBE' -Quiet)) {
         throw 'R5 stderr probe output was not preserved in the native-process log.'
     }
-    Write-Host 'R5 STDERR PROBE: PASS (stderr preserved; exit code controls failure)' -ForegroundColor Green
+    Write-Host 'R5 STDERR PROBE: PASS (EncodedCommand; stderr preserved; exit code controls failure)' -ForegroundColor Green
 } finally {
     Remove-Item -LiteralPath $stderrProbe -Force -ErrorAction SilentlyContinue
 }
@@ -234,6 +248,7 @@ if ($unexpected.Count -gt 0) {
 Write-Host "`n=== PRS1 R5 PRE-BENCHMARK CONTRACT: PASS ===" -ForegroundColor Green
 Write-Host "source_commit=$sha"
 Write-Host 'native_process_failure_policy=EXIT_CODE_ONLY'
+Write-Host 'powershell_inline_transport=ENCODED_COMMAND_ONLY'
 Write-Host 'benchmark_profiles=archive-max-only'
 Write-Host 'clippy_warning_map=0'
 
