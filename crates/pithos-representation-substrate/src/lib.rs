@@ -11,18 +11,20 @@ use std::collections::{HashMap, VecDeque};
 use std::io::Cursor;
 
 pub const SUBSTRATE_CODEC_ID: u16 = 5;
-pub const SUBSTRATE_CODEC_VERSION: u16 = 1;
+pub const SUBSTRATE_CODEC_VERSION: u16 = 2;
 
 const MAGIC: &[u8; 4] = b"PRS1";
-const FORMAT_VERSION: u16 = 1;
+const FORMAT_VERSION: u16 = 2;
 const HEADER_LEN: usize = 24;
 const PLANE_RECORD_LEN: usize = 24;
 const PLANE_COUNT: u16 = 8;
 const MIN_CELL_BYTES: usize = 4 * 1024;
 const MAX_CELL_BYTES: usize = 1024 * 1024;
+const SPLIT_EVALUATION_MIN_BYTES: usize = 64 * 1024;
 const MAX_RECURSION_DEPTH: usize = 8;
 const MAX_CELL_COUNT: usize = 1_000_000;
 const TEMPLATE_WINDOW: usize = 16;
+const SAME_LENGTH_TEMPLATE_WINDOW: usize = 16;
 const LZMA_MIN_PLANE_BYTES: usize = 64 * 1024;
 const LZMA_MAX_PLANE_BYTES: usize = 64 * 1024 * 1024;
 const DECODE_SLACK_BYTES: u64 = 16 * 1024 * 1024;
@@ -31,10 +33,20 @@ const PLANE_DESCRIPTOR: u16 = 0;
 const PLANE_RAW: u16 = 1;
 const PLANE_OVERLAY: u16 = 2;
 const PLANE_MIXTURE: u16 = 3;
-const PLANE_AXIS_HI: u16 = 4;
-const PLANE_AXIS_LO: u16 = 5;
+const PLANE_AXIS_A: u16 = 4;
+const PLANE_AXIS_B: u16 = 5;
 const PLANE_DEFECT: u16 = 6;
 const PLANE_TRANSITION: u16 = 7;
+
+const OVERLAY_REPLACE: u8 = 0;
+const OVERLAY_XOR: u8 = 1;
+const MIXTURE_BITPACK: u8 = 0;
+const MIXTURE_COMBINADIC: u8 = 1;
+const AXIS_NIBBLE: u8 = 0;
+const AXIS_XOR_NIBBLE: u8 = 1;
+const AXIS_EVEN_ODD: u8 = 2;
+const TRANSITION_ABSOLUTE: u8 = 0;
+const TRANSITION_DELTA: u8 = 1;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SubstrateStats {
@@ -46,6 +58,12 @@ pub struct SubstrateStats {
     pub axial_cells: u32,
     pub defect_cells: u32,
     pub transition_cells: u32,
+    pub overlay_xor_cells: u32,
+    pub mixture_combinadic_cells: u32,
+    pub axial_xor_cells: u32,
+    pub axial_even_odd_cells: u32,
+    pub periodic_defect_cells: u32,
+    pub delta_transition_cells: u32,
     pub encoded_bytes: u64,
 }
 
@@ -63,24 +81,28 @@ enum Candidate {
     },
     Overlay {
         base: usize,
+        mode: u8,
         changes: usize,
         payload: Vec<u8>,
     },
     Mixture {
+        mode: u8,
         alphabet: Vec<u8>,
         bits: u8,
         payload: Vec<u8>,
     },
     Axial {
-        hi: Vec<u8>,
-        lo: Vec<u8>,
+        mode: u8,
+        axis_a: Vec<u8>,
+        axis_b: Vec<u8>,
     },
     Defect {
-        default: u8,
+        pattern: Vec<u8>,
         defects: usize,
         payload: Vec<u8>,
     },
     Transition {
+        mode: u8,
         runs: usize,
         payload: Vec<u8>,
     },
@@ -97,8 +119,8 @@ struct RawPlanes {
     raw: Vec<u8>,
     overlay: Vec<u8>,
     mixture: Vec<u8>,
-    axis_hi: Vec<u8>,
-    axis_lo: Vec<u8>,
+    axis_a: Vec<u8>,
+    axis_b: Vec<u8>,
     defect: Vec<u8>,
     transition: Vec<u8>,
 }
@@ -138,15 +160,16 @@ pub fn encode(
     if cells.len() > MAX_CELL_COUNT {
         return Err(PithosError::ResourceLimit("PRS1 cell count"));
     }
+
     let mut planes = RawPlanes::default();
     let mut stats = SubstrateStats {
         cell_count: u32::try_from(cells.len())
             .map_err(|_| PithosError::ResourceLimit("PRS1 cell count"))?,
         ..SubstrateStats::default()
     };
-
     let mut exact = HashMap::<[u8; 32], usize>::new();
     let mut coarse = HashMap::<u64, VecDeque<usize>>::new();
+    let mut same_length = HashMap::<usize, VecDeque<usize>>::new();
 
     for (index, range) in cells.iter().copied().enumerate() {
         let end = range
@@ -156,18 +179,30 @@ pub fn encode(
         let bytes = input
             .get(range.start..end)
             .ok_or(PithosError::InvalidRange)?;
-        let candidate = choose_candidate(bytes, input, &cells, index, &exact, &coarse)?;
+        let candidate = choose_candidate(
+            bytes,
+            input,
+            &cells,
+            index,
+            &exact,
+            &coarse,
+            &same_length,
+        )?;
         write_varint(range.len as u64, &mut planes.descriptor);
         apply_candidate(candidate, bytes, &mut planes, &mut stats);
 
         let hash = *blake3::hash(bytes).as_bytes();
         exact.entry(hash).or_insert(index);
-        let key = coarse_fingerprint(bytes);
-        let queue = coarse.entry(key).or_default();
-        queue.push_back(index);
-        while queue.len() > TEMPLATE_WINDOW {
-            queue.pop_front();
-        }
+        push_window(
+            coarse.entry(coarse_fingerprint(bytes)).or_default(),
+            index,
+            TEMPLATE_WINDOW,
+        );
+        push_window(
+            same_length.entry(range.len).or_default(),
+            index,
+            SAME_LENGTH_TEMPLATE_WINDOW,
+        );
     }
 
     let raw_planes = [
@@ -175,8 +210,8 @@ pub fn encode(
         (PLANE_RAW, planes.raw),
         (PLANE_OVERLAY, planes.overlay),
         (PLANE_MIXTURE, planes.mixture),
-        (PLANE_AXIS_HI, planes.axis_hi),
-        (PLANE_AXIS_LO, planes.axis_lo),
+        (PLANE_AXIS_A, planes.axis_a),
+        (PLANE_AXIS_B, planes.axis_b),
         (PLANE_DEFECT, planes.defect),
         (PLANE_TRANSITION, planes.transition),
     ];
@@ -236,6 +271,7 @@ pub fn decode(payload: &[u8], expected_len: u64) -> Result<Vec<u8>> {
     if cell_count > MAX_CELL_COUNT {
         return Err(PithosError::ResourceLimit("PRS1 cell count"));
     }
+
     let table_len = usize::from(PLANE_COUNT)
         .checked_mul(PLANE_RECORD_LEN)
         .ok_or(PithosError::IntegerOverflow)?;
@@ -302,15 +338,15 @@ pub fn decode(payload: &[u8], expected_len: u64) -> Result<Vec<u8>> {
             .remove(&PLANE_MIXTURE)
             .ok_or(PithosError::MissingSection("PRS1 mixture"))?,
     );
-    let mut axis_hi = PlaneCursor::new(
+    let mut axis_a = PlaneCursor::new(
         decoded
-            .remove(&PLANE_AXIS_HI)
-            .ok_or(PithosError::MissingSection("PRS1 axis-hi"))?,
+            .remove(&PLANE_AXIS_A)
+            .ok_or(PithosError::MissingSection("PRS1 axis-a"))?,
     );
-    let mut axis_lo = PlaneCursor::new(
+    let mut axis_b = PlaneCursor::new(
         decoded
-            .remove(&PLANE_AXIS_LO)
-            .ok_or(PithosError::MissingSection("PRS1 axis-lo"))?,
+            .remove(&PLANE_AXIS_B)
+            .ok_or(PithosError::MissingSection("PRS1 axis-b"))?,
     );
     let mut defect = PlaneCursor::new(
         decoded
@@ -331,10 +367,7 @@ pub fn decode(payload: &[u8], expected_len: u64) -> Result<Vec<u8>> {
     for _ in 0..cell_count {
         let len = usize::try_from(read_varint(&descriptor, &mut descriptor_pos)?)
             .map_err(|_| PithosError::MemoryLimit)?;
-        let kind = *descriptor
-            .get(descriptor_pos)
-            .ok_or(PithosError::InvalidRange)?;
-        descriptor_pos += 1;
+        let kind = take_descriptor_byte(&descriptor, &mut descriptor_pos)?;
         let start = output.len();
         match kind {
             0 => {
@@ -353,6 +386,10 @@ pub fn decode(payload: &[u8], expected_len: u64) -> Result<Vec<u8>> {
             2 => {
                 let base = usize::try_from(read_varint(&descriptor, &mut descriptor_pos)?)
                     .map_err(|_| PithosError::IntegerOverflow)?;
+                let mode = take_descriptor_byte(&descriptor, &mut descriptor_pos)?;
+                if !matches!(mode, OVERLAY_REPLACE | OVERLAY_XOR) {
+                    return Err(PithosError::InvalidMetadata("PRS1 overlay mode"));
+                }
                 let changes = usize::try_from(read_varint(&descriptor, &mut descriptor_pos)?)
                     .map_err(|_| PithosError::IntegerOverflow)?;
                 let payload_len = usize::try_from(read_varint(&descriptor, &mut descriptor_pos)?)
@@ -362,22 +399,27 @@ pub fn decode(payload: &[u8], expected_len: u64) -> Result<Vec<u8>> {
                     &ranges,
                     base,
                     len,
+                    mode,
                     changes,
                     overlay.take(payload_len)?,
                 )?;
                 output.extend_from_slice(&bytes);
             }
             3 => {
-                let alphabet_len = *descriptor
-                    .get(descriptor_pos)
-                    .ok_or(PithosError::InvalidRange)? as usize;
-                descriptor_pos += 1;
-                let bits = *descriptor
-                    .get(descriptor_pos)
-                    .ok_or(PithosError::InvalidRange)?;
-                descriptor_pos += 1;
+                let mode = take_descriptor_byte(&descriptor, &mut descriptor_pos)?;
+                if !matches!(mode, MIXTURE_BITPACK | MIXTURE_COMBINADIC) {
+                    return Err(PithosError::InvalidMetadata("PRS1 mixture mode"));
+                }
+                let alphabet_len = usize::from(take_descriptor_byte(
+                    &descriptor,
+                    &mut descriptor_pos,
+                )?);
+                let bits = take_descriptor_byte(&descriptor, &mut descriptor_pos)?;
                 if !(2..=16).contains(&alphabet_len) || !(1..=4).contains(&bits) {
                     return Err(PithosError::InvalidMetadata("PRS1 mixture metadata"));
+                }
+                if mode == MIXTURE_COMBINADIC && (alphabet_len != 2 || bits != 1) {
+                    return Err(PithosError::InvalidMetadata("PRS1 combinadic metadata"));
                 }
                 let alphabet_end = descriptor_pos
                     .checked_add(alphabet_len)
@@ -388,36 +430,70 @@ pub fn decode(payload: &[u8], expected_len: u64) -> Result<Vec<u8>> {
                 descriptor_pos = alphabet_end;
                 let payload_len = usize::try_from(read_varint(&descriptor, &mut descriptor_pos)?)
                     .map_err(|_| PithosError::MemoryLimit)?;
-                let bytes =
-                    unpack_symbol_indexes(mixture.take(payload_len)?, alphabet, bits, len)?;
+                let payload = mixture.take(payload_len)?;
+                let bytes = if mode == MIXTURE_COMBINADIC {
+                    decode_binary_combinadic(payload, alphabet, len)?
+                } else {
+                    unpack_symbol_indexes(payload, alphabet, bits, len)?
+                };
                 output.extend_from_slice(&bytes);
             }
             4 => {
-                let hi_len = usize::try_from(read_varint(&descriptor, &mut descriptor_pos)?)
-                    .map_err(|_| PithosError::MemoryLimit)?;
-                let lo_len = usize::try_from(read_varint(&descriptor, &mut descriptor_pos)?)
-                    .map_err(|_| PithosError::MemoryLimit)?;
-                let bytes = decode_axes(axis_hi.take(hi_len)?, axis_lo.take(lo_len)?, len)?;
+                let mode = take_descriptor_byte(&descriptor, &mut descriptor_pos)?;
+                if !matches!(mode, AXIS_NIBBLE | AXIS_XOR_NIBBLE | AXIS_EVEN_ODD) {
+                    return Err(PithosError::InvalidMetadata("PRS1 axial mode"));
+                }
+                let axis_a_len =
+                    usize::try_from(read_varint(&descriptor, &mut descriptor_pos)?)
+                        .map_err(|_| PithosError::MemoryLimit)?;
+                let axis_b_len =
+                    usize::try_from(read_varint(&descriptor, &mut descriptor_pos)?)
+                        .map_err(|_| PithosError::MemoryLimit)?;
+                let bytes = decode_axes(
+                    mode,
+                    axis_a.take(axis_a_len)?,
+                    axis_b.take(axis_b_len)?,
+                    len,
+                )?;
                 output.extend_from_slice(&bytes);
             }
             5 => {
-                let default = *descriptor
-                    .get(descriptor_pos)
+                let period = usize::from(take_descriptor_byte(
+                    &descriptor,
+                    &mut descriptor_pos,
+                )?);
+                if !matches!(period, 1 | 2 | 4 | 8) {
+                    return Err(PithosError::InvalidMetadata("PRS1 defect period"));
+                }
+                let pattern_end = descriptor_pos
+                    .checked_add(period)
+                    .ok_or(PithosError::IntegerOverflow)?;
+                let pattern = descriptor
+                    .get(descriptor_pos..pattern_end)
                     .ok_or(PithosError::InvalidRange)?;
-                descriptor_pos += 1;
+                descriptor_pos = pattern_end;
                 let defects = usize::try_from(read_varint(&descriptor, &mut descriptor_pos)?)
                     .map_err(|_| PithosError::IntegerOverflow)?;
                 let payload_len = usize::try_from(read_varint(&descriptor, &mut descriptor_pos)?)
                     .map_err(|_| PithosError::MemoryLimit)?;
-                let bytes = decode_defects(default, len, defects, defect.take(payload_len)?)?;
+                let bytes = decode_defects(pattern, len, defects, defect.take(payload_len)?)?;
                 output.extend_from_slice(&bytes);
             }
             6 => {
+                let mode = take_descriptor_byte(&descriptor, &mut descriptor_pos)?;
+                if !matches!(mode, TRANSITION_ABSOLUTE | TRANSITION_DELTA) {
+                    return Err(PithosError::InvalidMetadata("PRS1 transition mode"));
+                }
                 let runs = usize::try_from(read_varint(&descriptor, &mut descriptor_pos)?)
                     .map_err(|_| PithosError::IntegerOverflow)?;
                 let payload_len = usize::try_from(read_varint(&descriptor, &mut descriptor_pos)?)
                     .map_err(|_| PithosError::MemoryLimit)?;
-                let bytes = decode_transitions(len, runs, transition.take(payload_len)?)?;
+                let bytes = decode_transitions(
+                    len,
+                    mode,
+                    runs,
+                    transition.take(payload_len)?,
+                )?;
                 output.extend_from_slice(&bytes);
             }
             _ => return Err(PithosError::InvalidMetadata("PRS1 cell kind")),
@@ -432,8 +508,8 @@ pub fn decode(payload: &[u8], expected_len: u64) -> Result<Vec<u8>> {
         || !raw.finished()
         || !overlay.finished()
         || !mixture.finished()
-        || !axis_hi.finished()
-        || !axis_lo.finished()
+        || !axis_a.finished()
+        || !axis_b.finished()
         || !defect.finished()
         || !transition.finished()
         || output.len() as u64 != expected_len
@@ -507,65 +583,79 @@ fn partition_range(
         }
         return Ok(());
     }
-    if !should_split(bytes) {
+
+    let Some(split) = best_split(bytes) else {
         output.push(CellRange { start, len });
         return Ok(());
-    }
-    let mut split = ((len / 2) / MIN_CELL_BYTES) * MIN_CELL_BYTES;
-    if split < MIN_CELL_BYTES || len - split < MIN_CELL_BYTES {
-        split = len / 2;
-    }
-    if split == 0 || split >= len {
-        output.push(CellRange { start, len });
-        return Ok(());
-    }
+    };
     partition_range(input, start, split, depth + 1, output)?;
     partition_range(input, start + split, len - split, depth + 1, output)
 }
 
-fn should_split(bytes: &[u8]) -> bool {
-    if bytes.len() <= 64 * 1024 || has_strong_single_model(bytes) {
-        return false;
+fn best_split(bytes: &[u8]) -> Option<usize> {
+    if bytes.len() < SPLIT_EVALUATION_MIN_BYTES || has_strong_single_model(bytes) {
+        return None;
     }
-    let quarter = bytes.len() / 4;
-    if quarter == 0 {
-        return false;
+    let whole = intrinsic_cost_estimate(bytes);
+    let min_part = MIN_CELL_BYTES.min(bytes.len() / 2);
+    if min_part == 0 {
+        return None;
     }
-    let mut features = Vec::with_capacity(4);
-    for index in 0..4 {
-        let start = index * quarter;
-        let end = if index == 3 {
-            bytes.len()
-        } else {
-            (index + 1) * quarter
-        };
-        features.push(feature_vector(&bytes[start..end]));
+
+    let raw_points = [bytes.len() / 4, bytes.len() / 2, bytes.len() * 3 / 4];
+    let mut best = None::<(usize, usize)>;
+    for point in raw_points {
+        let aligned = (point / MIN_CELL_BYTES) * MIN_CELL_BYTES;
+        if aligned < MIN_CELL_BYTES || bytes.len().saturating_sub(aligned) < MIN_CELL_BYTES {
+            continue;
+        }
+        let left = intrinsic_cost_estimate(&bytes[..aligned]);
+        let right = intrinsic_cost_estimate(&bytes[aligned..]);
+        let combined = left.saturating_add(right).saturating_add(6);
+        if best.is_none_or(|(_, score)| combined < score) {
+            best = Some((aligned, combined));
+        }
     }
-    let unique_min = features.iter().map(|v| v.unique).min().unwrap_or(0);
-    let unique_max = features.iter().map(|v| v.unique).max().unwrap_or(0);
-    let dominant_min = features.iter().map(|v| v.dominant_pct).min().unwrap_or(0);
-    let dominant_max = features.iter().map(|v| v.dominant_pct).max().unwrap_or(0);
-    let transition_min = features
-        .iter()
-        .map(|v| v.transition_pct)
-        .min()
-        .unwrap_or(0);
-    let transition_max = features
-        .iter()
-        .map(|v| v.transition_pct)
-        .max()
-        .unwrap_or(0);
-    let zero_min = features.iter().map(|v| v.zero_pct).min().unwrap_or(0);
-    let zero_max = features.iter().map(|v| v.zero_pct).max().unwrap_or(0);
-    unique_max.saturating_sub(unique_min) >= 32
-        || dominant_max.saturating_sub(dominant_min) >= 20
-        || transition_max.saturating_sub(transition_min) >= 20
-        || zero_max.saturating_sub(zero_min) >= 20
+    let (split, split_cost) = best?;
+    let required_gain = (whole / 200).max(64);
+    if split_cost.saturating_add(required_gain) < whole {
+        Some(split)
+    } else {
+        None
+    }
+}
+
+fn intrinsic_cost_estimate(bytes: &[u8]) -> usize {
+    if bytes.is_empty() {
+        return 0;
+    }
+    let feature = feature_vector(bytes);
+    let mut best = entropy_estimate_bytes(bytes).saturating_add(2);
+    if (2..=16).contains(&(feature.unique as usize)) {
+        let bits = bits_for_symbols(feature.unique as usize) as usize;
+        best = best.min(
+            bytes
+                .len()
+                .saturating_mul(bits)
+                .div_ceil(8)
+                .saturating_add(feature.unique as usize + 8),
+        );
+    }
+    if feature.dominant_pct >= 70 {
+        let defects = bytes
+            .len()
+            .saturating_mul(100usize.saturating_sub(feature.dominant_pct as usize))
+            / 100;
+        best = best.min(defects.saturating_mul(2).saturating_add(8));
+    }
+    let runs = count_runs(bytes);
+    best = best.min(runs.saturating_mul(2).saturating_add(6));
+    best.min(axial_entropy_estimate_bytes(bytes).saturating_add(6))
 }
 
 fn has_strong_single_model(bytes: &[u8]) -> bool {
     let feature = feature_vector(bytes);
-    feature.unique <= 16 || feature.dominant_pct >= 80 || feature.transition_pct <= 20
+    feature.unique <= 4 || feature.dominant_pct >= 92 || feature.transition_pct <= 8
 }
 
 fn feature_vector(bytes: &[u8]) -> FeatureVector {
@@ -609,6 +699,7 @@ fn choose_candidate(
     index: usize,
     exact: &HashMap<[u8; 32], usize>,
     coarse: &HashMap<u64, VecDeque<usize>>,
+    same_length: &HashMap<usize, VecDeque<usize>>,
 ) -> Result<Candidate> {
     let hash = *blake3::hash(bytes).as_bytes();
     if let Some(base) = exact.get(&hash).copied() {
@@ -632,46 +723,66 @@ fn choose_candidate(
         candidate: Candidate::Raw,
     };
 
+    let mut template_bases = Vec::with_capacity(TEMPLATE_WINDOW + SAME_LENGTH_TEMPLATE_WINDOW);
     if let Some(queue) = coarse.get(&coarse_fingerprint(bytes)) {
         for base in queue.iter().copied().rev().take(TEMPLATE_WINDOW) {
-            if base >= index {
-                continue;
+            if base < index && !template_bases.contains(&base) {
+                template_bases.push(base);
             }
-            let range = ranges
-                .get(base)
-                .copied()
-                .ok_or(PithosError::InvalidMetadata("PRS1 overlay reference"))?;
-            if range.len != bytes.len() {
-                continue;
-            }
-            let end = range
-                .start
-                .checked_add(range.len)
-                .ok_or(PithosError::IntegerOverflow)?;
-            let template = input
-                .get(range.start..end)
-                .ok_or(PithosError::InvalidRange)?;
-            if let Some((changes, payload)) = encode_overlay(template, bytes) {
-                let score = payload.len().saturating_add(varint_len(base as u64) + 8);
-                replace_if_smaller(
-                    &mut best,
-                    score,
-                    Candidate::Overlay {
-                        base,
-                        changes,
-                        payload,
-                    },
-                );
+        }
+    }
+    if let Some(queue) = same_length.get(&bytes.len()) {
+        for base in queue
+            .iter()
+            .copied()
+            .rev()
+            .take(SAME_LENGTH_TEMPLATE_WINDOW)
+        {
+            if base < index && !template_bases.contains(&base) {
+                template_bases.push(base);
             }
         }
     }
 
-    if let Some((alphabet, bits, payload)) = encode_mixture(bytes) {
-        let score = payload.len().saturating_add(alphabet.len() + 8);
+    for base in template_bases {
+        let range = ranges
+            .get(base)
+            .copied()
+            .ok_or(PithosError::InvalidMetadata("PRS1 overlay reference"))?;
+        if range.len != bytes.len() {
+            continue;
+        }
+        let end = range
+            .start
+            .checked_add(range.len)
+            .ok_or(PithosError::IntegerOverflow)?;
+        let template = input
+            .get(range.start..end)
+            .ok_or(PithosError::InvalidRange)?;
+        if let Some((mode, changes, payload)) = encode_overlay(template, bytes) {
+            let score = entropy_estimate_bytes(&payload)
+                .saturating_add(varint_len(base as u64) + 10);
+            replace_if_smaller(
+                &mut best,
+                score,
+                Candidate::Overlay {
+                    base,
+                    mode,
+                    changes,
+                    payload,
+                },
+            );
+        }
+    }
+
+    if let Some((mode, alphabet, bits, payload)) = encode_mixture(bytes) {
+        let score = entropy_estimate_bytes(&payload)
+            .saturating_add(alphabet.len() + payload.len() / 32 + 10);
         replace_if_smaller(
             &mut best,
             score,
             Candidate::Mixture {
+                mode,
                 alphabet,
                 bits,
                 payload,
@@ -679,31 +790,44 @@ fn choose_candidate(
         );
     }
 
-    if let Some((default, defects, payload)) = encode_defects(bytes) {
-        let score = payload.len().saturating_add(8);
+    if let Some((pattern, defects, payload)) = encode_defects(bytes) {
+        let score = entropy_estimate_bytes(&payload)
+            .saturating_add(pattern.len() + payload.len() / 32 + 10);
         replace_if_smaller(
             &mut best,
             score,
             Candidate::Defect {
-                default,
+                pattern,
                 defects,
                 payload,
             },
         );
     }
 
-    if let Some((runs, payload)) = encode_transitions(bytes) {
-        let score = payload.len().saturating_add(6);
+    if let Some((mode, runs, payload)) = encode_transitions(bytes) {
+        let score = entropy_estimate_bytes(&payload)
+            .saturating_add(payload.len() / 32 + 8);
         replace_if_smaller(
             &mut best,
             score,
-            Candidate::Transition { runs, payload },
+            Candidate::Transition {
+                mode,
+                runs,
+                payload,
+            },
         );
     }
 
-    let (hi, lo) = encode_axes(bytes);
-    let axis_score = axial_entropy_estimate_bytes(bytes).saturating_add(6);
-    replace_if_smaller(&mut best, axis_score, Candidate::Axial { hi, lo });
+    let (mode, axis_a, axis_b, axis_score) = encode_best_axes(bytes);
+    replace_if_smaller(
+        &mut best,
+        axis_score,
+        Candidate::Axial {
+            mode,
+            axis_a,
+            axis_b,
+        },
+    );
     Ok(best.candidate)
 }
 
@@ -734,64 +858,97 @@ fn apply_candidate(
         }
         Candidate::Overlay {
             base,
+            mode,
             changes,
             payload,
         } => {
             planes.descriptor.push(2);
             write_varint(base as u64, &mut planes.descriptor);
+            planes.descriptor.push(mode);
             write_varint(changes as u64, &mut planes.descriptor);
             write_varint(payload.len() as u64, &mut planes.descriptor);
             planes.overlay.extend_from_slice(&payload);
             stats.overlay_cells += 1;
+            if mode == OVERLAY_XOR {
+                stats.overlay_xor_cells += 1;
+            }
         }
         Candidate::Mixture {
+            mode,
             alphabet,
             bits,
             payload,
         } => {
             planes.descriptor.push(3);
+            planes.descriptor.push(mode);
             planes.descriptor.push(alphabet.len() as u8);
             planes.descriptor.push(bits);
             planes.descriptor.extend_from_slice(&alphabet);
             write_varint(payload.len() as u64, &mut planes.descriptor);
             planes.mixture.extend_from_slice(&payload);
             stats.mixture_cells += 1;
+            if mode == MIXTURE_COMBINADIC {
+                stats.mixture_combinadic_cells += 1;
+            }
         }
-        Candidate::Axial { hi, lo } => {
+        Candidate::Axial {
+            mode,
+            axis_a,
+            axis_b,
+        } => {
             planes.descriptor.push(4);
-            write_varint(hi.len() as u64, &mut planes.descriptor);
-            write_varint(lo.len() as u64, &mut planes.descriptor);
-            planes.axis_hi.extend_from_slice(&hi);
-            planes.axis_lo.extend_from_slice(&lo);
+            planes.descriptor.push(mode);
+            write_varint(axis_a.len() as u64, &mut planes.descriptor);
+            write_varint(axis_b.len() as u64, &mut planes.descriptor);
+            planes.axis_a.extend_from_slice(&axis_a);
+            planes.axis_b.extend_from_slice(&axis_b);
             stats.axial_cells += 1;
+            if mode == AXIS_XOR_NIBBLE {
+                stats.axial_xor_cells += 1;
+            } else if mode == AXIS_EVEN_ODD {
+                stats.axial_even_odd_cells += 1;
+            }
         }
         Candidate::Defect {
-            default,
+            pattern,
             defects,
             payload,
         } => {
             planes.descriptor.push(5);
-            planes.descriptor.push(default);
+            planes.descriptor.push(pattern.len() as u8);
+            planes.descriptor.extend_from_slice(&pattern);
             write_varint(defects as u64, &mut planes.descriptor);
             write_varint(payload.len() as u64, &mut planes.descriptor);
             planes.defect.extend_from_slice(&payload);
             stats.defect_cells += 1;
+            if pattern.len() > 1 {
+                stats.periodic_defect_cells += 1;
+            }
         }
-        Candidate::Transition { runs, payload } => {
+        Candidate::Transition {
+            mode,
+            runs,
+            payload,
+        } => {
             planes.descriptor.push(6);
+            planes.descriptor.push(mode);
             write_varint(runs as u64, &mut planes.descriptor);
             write_varint(payload.len() as u64, &mut planes.descriptor);
             planes.transition.extend_from_slice(&payload);
             stats.transition_cells += 1;
+            if mode == TRANSITION_DELTA {
+                stats.delta_transition_cells += 1;
+            }
         }
     }
 }
 
-fn encode_overlay(template: &[u8], bytes: &[u8]) -> Option<(usize, Vec<u8>)> {
+fn encode_overlay(template: &[u8], bytes: &[u8]) -> Option<(u8, usize, Vec<u8>)> {
     if template.len() != bytes.len() || bytes.is_empty() {
         return None;
     }
-    let mut payload = Vec::new();
+    let mut replacement = Vec::new();
+    let mut xor = Vec::new();
     let mut changes = 0usize;
     let mut previous = None::<usize>;
     for (position, (&left, &right)) in template.iter().zip(bytes).enumerate() {
@@ -803,14 +960,26 @@ fn encode_overlay(template: &[u8], bytes: &[u8]) -> Option<(usize, Vec<u8>)> {
             return None;
         }
         let gap = previous.map_or(position, |value| position - value - 1);
-        write_varint(gap as u64, &mut payload);
-        payload.push(right);
+        write_varint(gap as u64, &mut replacement);
+        replacement.push(right);
+        write_varint(gap as u64, &mut xor);
+        xor.push(left ^ right);
         previous = Some(position);
     }
-    if changes == 0 || payload.len().saturating_add(8) >= bytes.len() {
+    if changes == 0 {
+        return None;
+    }
+    let replacement_score = entropy_estimate_bytes(&replacement);
+    let xor_score = entropy_estimate_bytes(&xor);
+    let (mode, payload) = if xor_score < replacement_score {
+        (OVERLAY_XOR, xor)
+    } else {
+        (OVERLAY_REPLACE, replacement)
+    };
+    if payload.len().saturating_add(10) >= bytes.len() {
         None
     } else {
-        Some((changes, payload))
+        Some((mode, changes, payload))
     }
 }
 
@@ -819,6 +988,7 @@ fn decode_overlay(
     ranges: &[CellRange],
     base: usize,
     len: usize,
+    mode: u8,
     changes: usize,
     payload: &[u8],
 ) -> Result<Vec<u8>> {
@@ -845,7 +1015,12 @@ fn decode_overlay(
         let index = previous.map_or(gap, |value| value + 1 + gap);
         let value = *payload.get(pos).ok_or(PithosError::InvalidRange)?;
         pos += 1;
-        *bytes.get_mut(index).ok_or(PithosError::InvalidRange)? = value;
+        let slot = bytes.get_mut(index).ok_or(PithosError::InvalidRange)?;
+        if mode == OVERLAY_XOR {
+            *slot ^= value;
+        } else {
+            *slot = value;
+        }
         previous = Some(index);
     }
     if pos != payload.len() {
@@ -854,7 +1029,7 @@ fn decode_overlay(
     Ok(bytes)
 }
 
-fn encode_mixture(bytes: &[u8]) -> Option<(Vec<u8>, u8, Vec<u8>)> {
+fn encode_mixture(bytes: &[u8]) -> Option<(u8, Vec<u8>, u8, Vec<u8>)> {
     if bytes.len() < 64 {
         return None;
     }
@@ -870,16 +1045,27 @@ fn encode_mixture(bytes: &[u8]) -> Option<(Vec<u8>, u8, Vec<u8>)> {
     if !(2..=16).contains(&alphabet.len()) {
         return None;
     }
+
     let bits = bits_for_symbols(alphabet.len());
     let mut index = [u8::MAX; 256];
     for (position, value) in alphabet.iter().copied().enumerate() {
         index[value as usize] = position as u8;
     }
-    let payload = pack_symbol_indexes(bytes, &index, bits);
-    if payload.len().saturating_add(alphabet.len() + 8) >= bytes.len() {
+    let bitpacked = pack_symbol_indexes(bytes, &index, bits);
+    let (mode, payload) = if alphabet.len() == 2 {
+        let combinadic = encode_binary_combinadic(bytes, &alphabet);
+        if combinadic.len() < bitpacked.len() {
+            (MIXTURE_COMBINADIC, combinadic)
+        } else {
+            (MIXTURE_BITPACK, bitpacked)
+        }
+    } else {
+        (MIXTURE_BITPACK, bitpacked)
+    };
+    if payload.len().saturating_add(alphabet.len() + 10) >= bytes.len() {
         None
     } else {
-        Some((alphabet, bits, payload))
+        Some((mode, alphabet, bits, payload))
     }
 }
 
@@ -944,7 +1130,124 @@ fn unpack_symbol_indexes(
     Ok(output)
 }
 
-fn encode_axes(bytes: &[u8]) -> (Vec<u8>, Vec<u8>) {
+fn encode_binary_combinadic(bytes: &[u8], alphabet: &[u8]) -> Vec<u8> {
+    let mut output = Vec::new();
+    for block in bytes.chunks(64) {
+        let positions = block
+            .iter()
+            .enumerate()
+            .filter_map(|(index, value)| (*value == alphabet[1]).then_some(index))
+            .collect::<Vec<_>>();
+        output.push(positions.len() as u8);
+        write_varint(combinadic_rank(&positions), &mut output);
+    }
+    output
+}
+
+fn decode_binary_combinadic(payload: &[u8], alphabet: &[u8], expected: usize) -> Result<Vec<u8>> {
+    if alphabet.len() != 2 {
+        return Err(PithosError::InvalidMetadata("PRS1 combinadic alphabet"));
+    }
+    let mut output = Vec::with_capacity(expected);
+    let mut pos = 0usize;
+    while output.len() < expected {
+        let block_len = (expected - output.len()).min(64);
+        let k = usize::from(*payload.get(pos).ok_or(PithosError::InvalidRange)?);
+        pos += 1;
+        if k > block_len {
+            return Err(PithosError::InvalidMetadata("PRS1 combinadic cardinality"));
+        }
+        let rank = read_varint(payload, &mut pos)?;
+        let limit = binomial(block_len, k);
+        if rank >= limit {
+            return Err(PithosError::InvalidMetadata("PRS1 combinadic rank"));
+        }
+        let positions = combinadic_unrank(block_len, k, rank)?;
+        let mut block = vec![alphabet[0]; block_len];
+        for index in positions {
+            block[index] = alphabet[1];
+        }
+        output.extend_from_slice(&block);
+    }
+    if pos != payload.len() {
+        return Err(PithosError::InvalidMetadata("PRS1 combinadic trailing"));
+    }
+    Ok(output)
+}
+
+fn combinadic_rank(positions: &[usize]) -> u64 {
+    positions
+        .iter()
+        .copied()
+        .enumerate()
+        .fold(0_u64, |rank, (index, position)| {
+            rank.saturating_add(binomial(position, index + 1))
+        })
+}
+
+fn combinadic_unrank(n: usize, k: usize, mut rank: u64) -> Result<Vec<usize>> {
+    let mut positions = vec![0usize; k];
+    let mut upper = n;
+    for i in (1..=k).rev() {
+        let mut candidate = upper;
+        loop {
+            if candidate == 0 {
+                return Err(PithosError::InvalidMetadata("PRS1 combinadic decode"));
+            }
+            candidate -= 1;
+            let value = binomial(candidate, i);
+            if value <= rank {
+                positions[i - 1] = candidate;
+                rank -= value;
+                upper = candidate;
+                break;
+            }
+        }
+    }
+    if rank != 0 {
+        return Err(PithosError::InvalidMetadata("PRS1 combinadic remainder"));
+    }
+    Ok(positions)
+}
+
+fn binomial(n: usize, k: usize) -> u64 {
+    if k > n {
+        return 0;
+    }
+    let k = k.min(n - k);
+    let mut value = 1_u128;
+    for i in 1..=k {
+        value = value * (n - k + i) as u128 / i as u128;
+    }
+    value as u64
+}
+
+fn encode_best_axes(bytes: &[u8]) -> (u8, Vec<u8>, Vec<u8>, usize) {
+    let (nibble_a, nibble_b) = encode_nibble_axes(bytes);
+    let nibble_score = entropy_estimate_bytes(&nibble_a)
+        .saturating_add(entropy_estimate_bytes(&nibble_b))
+        .saturating_add(7);
+
+    let (xor_a, xor_b) = encode_xor_nibble_axes(bytes);
+    let xor_score = entropy_estimate_bytes(&xor_a)
+        .saturating_add(entropy_estimate_bytes(&xor_b))
+        .saturating_add(7);
+
+    let (even, odd) = encode_even_odd_axes(bytes);
+    let even_odd_score = entropy_estimate_bytes(&even)
+        .saturating_add(entropy_estimate_bytes(&odd))
+        .saturating_add(7);
+
+    if xor_score < nibble_score && xor_score <= even_odd_score {
+        (AXIS_XOR_NIBBLE, xor_a, xor_b, xor_score)
+    } else if even_odd_score < nibble_score {
+        (AXIS_EVEN_ODD, even, odd, even_odd_score)
+    } else {
+        (AXIS_NIBBLE, nibble_a, nibble_b, nibble_score)
+    }
+}
+
+fn encode_nibble_axes(bytes: &[u8]) -> (Vec<u8>, Vec<u8>) {
     let mut high = Vec::with_capacity(bytes.len().div_ceil(2));
     let mut low = Vec::with_capacity(bytes.len().div_ceil(2));
     for pair in bytes.chunks(2) {
@@ -956,10 +1259,66 @@ fn encode_axes(bytes: &[u8]) -> (Vec<u8>, Vec<u8>) {
     (high, low)
 }
 
-fn decode_axes(high: &[u8], low: &[u8], expected: usize) -> Result<Vec<u8>> {
+fn encode_xor_nibble_axes(bytes: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    let mut delta = Vec::with_capacity(bytes.len());
+    let mut previous = 0_u8;
+    for byte in bytes.iter().copied() {
+        delta.push(byte ^ previous);
+        previous = byte;
+    }
+    encode_nibble_axes(&delta)
+}
+
+fn encode_even_odd_axes(bytes: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    let mut even = Vec::with_capacity(bytes.len().div_ceil(2));
+    let mut odd = Vec::with_capacity(bytes.len() / 2);
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        if index % 2 == 0 {
+            even.push(byte);
+        } else {
+            odd.push(byte);
+        }
+    }
+    (even, odd)
+}
+
+fn decode_axes(mode: u8, axis_a: &[u8], axis_b: &[u8], expected: usize) -> Result<Vec<u8>> {
+    match mode {
+        AXIS_NIBBLE => decode_nibble_axes(axis_a, axis_b, expected),
+        AXIS_XOR_NIBBLE => {
+            let delta = decode_nibble_axes(axis_a, axis_b, expected)?;
+            let mut output = Vec::with_capacity(expected);
+            let mut previous = 0_u8;
+            for value in delta {
+                let byte = value ^ previous;
+                output.push(byte);
+                previous = byte;
+            }
+            Ok(output)
+        }
+        AXIS_EVEN_ODD => {
+            if axis_a.len() != expected.div_ceil(2) || axis_b.len() != expected / 2 {
+                return Err(PithosError::InvalidMetadata("PRS1 even-odd length"));
+            }
+            let mut output = Vec::with_capacity(expected);
+            for index in 0..expected {
+                let value = if index % 2 == 0 {
+                    axis_a[index / 2]
+                } else {
+                    axis_b[index / 2]
+                };
+                output.push(value);
+            }
+            Ok(output)
+        }
+        _ => Err(PithosError::InvalidMetadata("PRS1 axial mode")),
+    }
+}
+
+fn decode_nibble_axes(high: &[u8], low: &[u8], expected: usize) -> Result<Vec<u8>> {
     let packed = expected.div_ceil(2);
     if high.len() != packed || low.len() != packed {
-        return Err(PithosError::InvalidMetadata("PRS1 axial length"));
+        return Err(PithosError::InvalidMetadata("PRS1 nibble length"));
     }
     let mut output = Vec::with_capacity(expected);
     for (&hi, &lo) in high.iter().zip(low) {
@@ -971,27 +1330,40 @@ fn decode_axes(high: &[u8], low: &[u8], expected: usize) -> Result<Vec<u8>> {
     Ok(output)
 }
 
-fn encode_defects(bytes: &[u8]) -> Option<(u8, usize, Vec<u8>)> {
+fn encode_defects(bytes: &[u8]) -> Option<(Vec<u8>, usize, Vec<u8>)> {
     if bytes.len() < 64 {
         return None;
     }
-    let mut counts = [0_u32; 256];
-    for byte in bytes {
-        counts[*byte as usize] += 1;
+    let mut best = None::<(Vec<u8>, usize)>;
+    for period in [1usize, 2, 4, 8] {
+        if period > bytes.len() {
+            continue;
+        }
+        let pattern = periodic_pattern(bytes, period);
+        let matches = bytes
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(index, value)| *value == pattern[*index % period])
+            .count();
+        if best
+            .as_ref()
+            .is_none_or(|(_, best_matches)| matches > *best_matches)
+        {
+            best = Some((pattern, matches));
+        }
     }
-    let (default, count) = counts
-        .iter()
-        .copied()
-        .enumerate()
-        .max_by_key(|(_, count)| *count)?;
-    if (count as usize).saturating_mul(100) < bytes.len().saturating_mul(70) {
+    let (pattern, matches) = best?;
+    if matches.saturating_mul(100) < bytes.len().saturating_mul(70) {
         return None;
     }
+
+    let period = pattern.len();
     let mut payload = Vec::new();
     let mut defects = 0usize;
     let mut previous = None::<usize>;
     for (position, byte) in bytes.iter().copied().enumerate() {
-        if byte == default as u8 {
+        if byte == pattern[position % period] {
             continue;
         }
         let gap = previous.map_or(position, |value| position - value - 1);
@@ -1000,15 +1372,39 @@ fn encode_defects(bytes: &[u8]) -> Option<(u8, usize, Vec<u8>)> {
         defects += 1;
         previous = Some(position);
     }
-    if defects == 0 || payload.len().saturating_add(8) >= bytes.len() {
+    if defects == 0 || payload.len().saturating_add(pattern.len() + 10) >= bytes.len() {
         None
     } else {
-        Some((default as u8, defects, payload))
+        Some((pattern, defects, payload))
     }
 }
 
-fn decode_defects(default: u8, len: usize, defects: usize, payload: &[u8]) -> Result<Vec<u8>> {
-    let mut output = vec![default; len];
+fn periodic_pattern(bytes: &[u8], period: usize) -> Vec<u8> {
+    let mut pattern = Vec::with_capacity(period);
+    for residue in 0..period {
+        let mut counts = [0_u32; 256];
+        for index in (residue..bytes.len()).step_by(period) {
+            counts[bytes[index] as usize] += 1;
+        }
+        let value = counts
+            .iter()
+            .copied()
+            .enumerate()
+            .max_by_key(|(_, count)| *count)
+            .map(|(value, _)| value as u8)
+            .unwrap_or(0);
+        pattern.push(value);
+    }
+    pattern
+}
+
+fn decode_defects(pattern: &[u8], len: usize, defects: usize, payload: &[u8]) -> Result<Vec<u8>> {
+    if pattern.is_empty() {
+        return Err(PithosError::InvalidMetadata("PRS1 defect pattern"));
+    }
+    let mut output = (0..len)
+        .map(|index| pattern[index % pattern.len()])
+        .collect::<Vec<_>>();
     let mut pos = 0usize;
     let mut previous = None::<usize>;
     for _ in 0..defects {
@@ -1026,37 +1422,65 @@ fn decode_defects(default: u8, len: usize, defects: usize, payload: &[u8]) -> Re
     Ok(output)
 }
 
-fn encode_transitions(bytes: &[u8]) -> Option<(usize, Vec<u8>)> {
+fn encode_transitions(bytes: &[u8]) -> Option<(u8, usize, Vec<u8>)> {
     if bytes.len() < 64 {
         return None;
     }
-    let mut payload = Vec::new();
+    let mut absolute = Vec::new();
+    let mut delta = Vec::new();
     let mut runs = 0usize;
     let mut start = 0usize;
+    let mut previous_value = 0_u8;
     while start < bytes.len() {
         let value = bytes[start];
         let mut end = start + 1;
         while end < bytes.len() && bytes[end] == value {
             end += 1;
         }
-        payload.push(value);
-        write_varint((end - start) as u64, &mut payload);
+        let run = end - start;
+        absolute.push(value);
+        write_varint(run as u64, &mut absolute);
+        if runs == 0 {
+            delta.push(value);
+        } else {
+            delta.push(value.wrapping_sub(previous_value));
+        }
+        write_varint(run as u64, &mut delta);
+        previous_value = value;
         runs += 1;
         start = end;
     }
-    if payload.len().saturating_add(6) >= bytes.len() {
+    let absolute_score = entropy_estimate_bytes(&absolute);
+    let delta_score = entropy_estimate_bytes(&delta);
+    let (mode, payload) = if delta_score < absolute_score {
+        (TRANSITION_DELTA, delta)
+    } else {
+        (TRANSITION_ABSOLUTE, absolute)
+    };
+    if payload.len().saturating_add(8) >= bytes.len() {
         None
     } else {
-        Some((runs, payload))
+        Some((mode, runs, payload))
     }
 }
 
-fn decode_transitions(expected: usize, runs: usize, payload: &[u8]) -> Result<Vec<u8>> {
+fn decode_transitions(
+    expected: usize,
+    mode: u8,
+    runs: usize,
+    payload: &[u8],
+) -> Result<Vec<u8>> {
     let mut output = Vec::with_capacity(expected);
     let mut pos = 0usize;
-    for _ in 0..runs {
-        let value = *payload.get(pos).ok_or(PithosError::InvalidRange)?;
+    let mut previous_value = 0_u8;
+    for run_index in 0..runs {
+        let encoded_value = *payload.get(pos).ok_or(PithosError::InvalidRange)?;
         pos += 1;
+        let value = if mode == TRANSITION_DELTA && run_index > 0 {
+            previous_value.wrapping_add(encoded_value)
+        } else {
+            encoded_value
+        };
         let run = usize::try_from(read_varint(payload, &mut pos)?)
             .map_err(|_| PithosError::MemoryLimit)?;
         let new_len = output
@@ -1067,11 +1491,19 @@ fn decode_transitions(expected: usize, runs: usize, payload: &[u8]) -> Result<Ve
             return Err(PithosError::ResourceLimit("PRS1 transition output"));
         }
         output.resize(new_len, value);
+        previous_value = value;
     }
     if pos != payload.len() || output.len() != expected {
         return Err(PithosError::InvalidMetadata("PRS1 transition trailing"));
     }
     Ok(output)
+}
+
+fn count_runs(bytes: &[u8]) -> usize {
+    if bytes.is_empty() {
+        return 0;
+    }
+    1 + bytes.windows(2).filter(|pair| pair[0] != pair[1]).count()
 }
 
 fn append_reference(
@@ -1117,10 +1549,6 @@ fn encode_plane(plane_id: u16, bytes: &[u8], entropy_level: i32) -> Result<Encod
             best = zstd;
         }
 
-        // The raw lane already competes against the standard full-group codecs.
-        // Re-running LZMA2 over a very large raw plane only duplicates expensive
-        // work. Reserve LZMA2 for transformed planes where multiplexing created
-        // a genuinely different statistical context, and cap the candidate size.
         if plane_id != PLANE_RAW
             && (LZMA_MIN_PLANE_BYTES..=LZMA_MAX_PLANE_BYTES).contains(&bytes.len())
         {
@@ -1285,6 +1713,13 @@ fn coarse_fingerprint(bytes: &[u8]) -> u64 {
     fingerprint
 }
 
+fn push_window(queue: &mut VecDeque<usize>, value: usize, limit: usize) {
+    queue.push_back(value);
+    while queue.len() > limit {
+        queue.pop_front();
+    }
+}
+
 fn write_varint(mut value: u64, output: &mut Vec<u8>) {
     while value >= 0x80 {
         output.push((value as u8 & 0x7f) | 0x80);
@@ -1317,6 +1752,12 @@ fn varint_len(mut value: u64) -> usize {
         len += 1;
     }
     len
+}
+
+fn take_descriptor_byte(bytes: &[u8], pos: &mut usize) -> Result<u8> {
+    let value = *bytes.get(*pos).ok_or(PithosError::InvalidRange)?;
+    *pos = pos.checked_add(1).ok_or(PithosError::IntegerOverflow)?;
+    Ok(value)
 }
 
 fn read_u16(bytes: &[u8], offset: usize) -> Result<u16> {
@@ -1399,7 +1840,78 @@ mod tests {
     }
 
     #[test]
-    fn mixture_defect_transition_and_axes_are_reversible() {
+    fn binary_combinadic_roundtrips_skewed_mixture() {
+        let alphabet = [0_u8, 1_u8];
+        let mut input = vec![0_u8; 4096];
+        for index in (0..input.len()).step_by(61) {
+            input[index] = 1;
+        }
+        let encoded = encode_binary_combinadic(&input, &alphabet);
+        assert_eq!(decode_binary_combinadic(&encoded, &alphabet, input.len()).unwrap(), input);
+        assert!(encoded.len() < input.len().div_ceil(8));
+    }
+
+    #[test]
+    fn periodic_defect_lattice_roundtrips() {
+        let pattern = [0x11_u8, 0x22, 0x33, 0x44];
+        let mut input = (0..128 * 1024)
+            .map(|index| pattern[index % pattern.len()])
+            .collect::<Vec<_>>();
+        for index in (0..input.len()).step_by(4093) {
+            input[index] ^= 0x5a;
+        }
+        let (model, defects, payload) = encode_defects(&input).unwrap();
+        assert_eq!(model.len(), 4);
+        assert_eq!(decode_defects(&model, input.len(), defects, &payload).unwrap(), input);
+    }
+
+    #[test]
+    fn all_axial_modes_are_reversible() {
+        let input = (0..4097)
+            .map(|index| ((index * 29 + index / 7) % 256) as u8)
+            .collect::<Vec<_>>();
+        for mode in [AXIS_NIBBLE, AXIS_XOR_NIBBLE, AXIS_EVEN_ODD] {
+            let (a, b) = match mode {
+                AXIS_NIBBLE => encode_nibble_axes(&input),
+                AXIS_XOR_NIBBLE => encode_xor_nibble_axes(&input),
+                AXIS_EVEN_ODD => encode_even_odd_axes(&input),
+                _ => unreachable!(),
+            };
+            assert_eq!(decode_axes(mode, &a, &b, input.len()).unwrap(), input);
+        }
+    }
+
+    #[test]
+    fn transition_delta_mode_roundtrips() {
+        let mut input = Vec::new();
+        for value in 0..64_u8 {
+            input.extend(std::iter::repeat_n(value.wrapping_mul(3), 128));
+        }
+        let (mode, runs, payload) = encode_transitions(&input).unwrap();
+        assert_eq!(decode_transitions(input.len(), mode, runs, &payload).unwrap(), input);
+    }
+
+    #[test]
+    fn recursive_partition_uses_model_cost_and_respects_boundaries() {
+        let mut left = vec![0_u8; MAX_CELL_BYTES + 12345];
+        for index in left.len() / 2..left.len() {
+            left[index] = ((index * 191 + 7) % 251) as u8;
+        }
+        let right = (0..MAX_CELL_BYTES + 54321)
+            .map(|index| (index % 251) as u8)
+            .collect::<Vec<_>>();
+        let mut input = left.clone();
+        input.extend_from_slice(&right);
+        let ranges = partition_members(&input, &[left.len() as u64, right.len() as u64]).unwrap();
+        assert!(ranges.len() > 2);
+        for range in ranges {
+            let end = range.start + range.len;
+            assert!(end <= left.len() || range.start >= left.len());
+        }
+    }
+
+    #[test]
+    fn representation_family_roundtrip() {
         let mixture = (0..256 * 1024)
             .map(|index| [b'A', b'B', b'C', b'D'][index % 4])
             .collect::<Vec<_>>();
@@ -1419,22 +1931,6 @@ mod tests {
         assert!(
             stats.mixture_cells + stats.defect_cells + stats.transition_cells + stats.axial_cells > 0
         );
-    }
-
-    #[test]
-    fn recursive_partition_respects_member_boundaries() {
-        let left = vec![b'A'; MAX_CELL_BYTES + 12345];
-        let right = (0..MAX_CELL_BYTES + 54321)
-            .map(|index| (index % 251) as u8)
-            .collect::<Vec<_>>();
-        let mut input = left.clone();
-        input.extend_from_slice(&right);
-        let ranges = partition_members(&input, &[left.len() as u64, right.len() as u64]).unwrap();
-        assert!(!ranges.is_empty());
-        for range in ranges {
-            let end = range.start + range.len;
-            assert!(end <= left.len() || range.start >= left.len());
-        }
     }
 
     #[test]
