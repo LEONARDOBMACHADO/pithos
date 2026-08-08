@@ -99,40 +99,46 @@ try {
     Remove-Item -LiteralPath $stderrProbe -Force -ErrorAction SilentlyContinue
 }
 
-# A new workspace crate must be represented by a Cargo-generated lockfile before
-# any benchmark is accepted. Never benchmark an uncommitted dependency graph.
+# Materialize only the missing workspace-package relationship in the existing
+# lockfile. `cargo generate-lockfile` is deliberately avoided because it can
+# re-resolve unrelated semver dependencies. The targeted check lets Cargo update
+# the current lock minimally; the run then stops for explicit diff review/commit.
 $lockPath = Join-Path $repo 'Cargo.lock'
 $lockHasSubstrate = (Test-Path -LiteralPath $lockPath -PathType Leaf) -and
     (Select-String -LiteralPath $lockPath -SimpleMatch 'name = "pithos-representation-substrate"' -Quiet)
 if (-not $lockHasSubstrate) {
-    Write-Host '=== PRS1 R5 LOCKFILE PREPARATION ===' -ForegroundColor Yellow
-    $generateLockExit = Invoke-PithosNativeProcess `
+    Write-Host '=== PRS1 R5 MINIMAL LOCKFILE PREPARATION ===' -ForegroundColor Yellow
+    $lockCheckExit = Invoke-PithosNativeProcess `
         -FilePath 'cargo' `
-        -Arguments @('generate-lockfile')
-    if ($generateLockExit -ne 0) {
-        throw "cargo generate-lockfile failed with exit code $generateLockExit"
+        -Arguments @(
+            'check',
+            '-p','pithos-representation-substrate',
+            '-p','pithos-native-codec-v18'
+        )
+    if ($lockCheckExit -ne 0) {
+        throw "targeted cargo check for lockfile preparation failed with exit code $lockCheckExit"
     }
 
     $unexpectedAfterLock = @(Get-UnexpectedStatus -AllowCargoLock)
     if ($unexpectedAfterLock.Count -gt 0) {
         $unexpectedAfterLock | ForEach-Object { Write-Host $_ -ForegroundColor Red }
-        throw 'Lockfile generation changed files other than Cargo.lock.'
+        throw 'Targeted Cargo lock preparation changed files other than Cargo.lock.'
     }
     $status = @(& git status --porcelain)
     $cargoLockChanged = @($status | Where-Object {
         $_.Length -gt 3 -and $_.Substring(3).Replace('\','/') -eq 'Cargo.lock'
     }).Count -eq 1
     if (-not $cargoLockChanged) {
-        throw 'Cargo.lock did not change as expected after adding PRS1 workspace crate.'
+        throw 'Cargo.lock did not change as expected after adding the PRS1 workspace crate.'
     }
     if (-not (Select-String -LiteralPath $lockPath -SimpleMatch 'name = "pithos-representation-substrate"' -Quiet)) {
-        throw 'Cargo-generated lockfile still does not contain pithos-representation-substrate.'
+        throw 'Cargo-updated lockfile still does not contain pithos-representation-substrate.'
     }
 
-    Write-Host "`n===== CARGO-GENERATED LOCKFILE DIFF =====" -ForegroundColor Cyan
+    Write-Host "`n===== TARGETED CARGO.LOCK DIFF =====" -ForegroundColor Cyan
     & git diff -- Cargo.lock
-    Write-Host "`nSTOP: commit only the Cargo-generated Cargo.lock, then rerun R5." -ForegroundColor Yellow
-    Write-Host 'Do not edit Cargo.lock manually.'
+    Write-Host "`nSTOP: review and commit ONLY the Cargo-generated Cargo.lock, then rerun R5." -ForegroundColor Yellow
+    Write-Host 'Reject the lock diff if unrelated external package versions/checksums changed. Do not edit Cargo.lock manually.'
     exit 23
 }
 
