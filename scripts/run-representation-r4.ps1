@@ -70,16 +70,42 @@ try {
             [Parameter(Mandatory=$true)][string]$Label,
             [Parameter(Mandatory=$true)][string]$LogPath
         )
-        $code = 0
+
+        $code = $null
         $watch = [System.Diagnostics.Stopwatch]::StartNew()
+
+        # Windows PowerShell 5.1 converts native stderr redirected with
+        # 2>&1 into PowerShell error records. Pithos intentionally emits
+        # PITHOS_REP_TRACE through stderr, so ErrorActionPreference=Stop
+        # must not be active while executing the native process.
+        #
+        # Success/failure of a native executable is determined exclusively
+        # by its process exit code, not by whether it produced stderr.
+        $previousErrorActionPreference = $ErrorActionPreference
+
         try {
-            & $Exe @Arguments 2>&1 | Tee-Object -FilePath $LogPath -Append | ForEach-Object { Write-Host $_ }
+            $ErrorActionPreference = 'Continue'
+
+            & $Exe @Arguments 2>&1 |
+                Tee-Object -FilePath $LogPath -Append |
+                ForEach-Object { Write-Host $_ }
+
+            # Capture immediately, before executing another native command.
             $code = $LASTEXITCODE
-        } finally {
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
             $watch.Stop()
         }
-        if ($null -eq $code) { $code = 0 }
-        if ($code -ne 0) { throw "$Label failed with exit code $code" }
+
+        if ($null -eq $code) {
+            throw "$Label completed without a native exit code"
+        }
+
+        if ($code -ne 0) {
+            throw "$Label failed with exit code $code; log=$LogPath"
+        }
+
         return [double][math]::Round($watch.Elapsed.TotalMilliseconds, 3)
     }
 
