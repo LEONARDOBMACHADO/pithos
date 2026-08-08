@@ -40,6 +40,10 @@ pub fn encode_exact_dedup(
     let workers = std::thread::available_parallelism()
         .map(|value| value.get())
         .unwrap_or(1);
+    // Preserve the historical v17/v12 level contract. PRS1 is representation-
+    // first and owns its entropy leaves, so ArchiveMax (native level 15) uses
+    // the strongest deterministic Zstd leaf level instead of inheriting 15.
+    let substrate_entropy_level = if level >= 15 { 19 } else { level };
 
     let (current, current_ms, floor, floor_ms, substrate, substrate_ms, race_mode) =
         if workers >= 3 && input.len() <= PRS1_PARALLEL_MAX_INPUT_BYTES {
@@ -51,7 +55,13 @@ pub fn encode_exact_dedup(
                     timed(|| pithos_native_floor::encode_exact_dedup(input, member_lengths, level))
                 });
                 let substrate = scope.spawn(|| {
-                    timed(|| pithos_representation_substrate::encode(input, member_lengths, level))
+                    timed(|| {
+                        pithos_representation_substrate::encode(
+                            input,
+                            member_lengths,
+                            substrate_entropy_level,
+                        )
+                    })
                 });
                 (current.join(), floor.join(), substrate.join())
             });
@@ -84,8 +94,13 @@ pub fn encode_exact_dedup(
                 .map_err(|_| PithosError::InvalidMetadata("native current worker panic"))?;
             let (floor, floor_ms) = floor_result
                 .map_err(|_| PithosError::InvalidMetadata("native floor worker panic"))?;
-            let (substrate, substrate_ms) =
-                timed(|| pithos_representation_substrate::encode(input, member_lengths, level));
+            let (substrate, substrate_ms) = timed(|| {
+                pithos_representation_substrate::encode(
+                    input,
+                    member_lengths,
+                    substrate_entropy_level,
+                )
+            });
             (
                 current?,
                 current_ms,
@@ -104,8 +119,13 @@ pub fn encode_exact_dedup(
                 timed(|| pithos_native_current::encode_exact_dedup(input, member_lengths, level));
             let (floor, floor_ms) =
                 timed(|| pithos_native_floor::encode_exact_dedup(input, member_lengths, level));
-            let (substrate, substrate_ms) =
-                timed(|| pithos_representation_substrate::encode(input, member_lengths, level));
+            let (substrate, substrate_ms) = timed(|| {
+                pithos_representation_substrate::encode(
+                    input,
+                    member_lengths,
+                    substrate_entropy_level,
+                )
+            });
             (
                 current?,
                 current_ms,
@@ -134,7 +154,7 @@ pub fn encode_exact_dedup(
 
     if representation_trace_enabled() {
         eprintln!(
-            "PITHOS_REP_TRACE\tstage=representation_race\tlevel={level}\tinput_bytes={}\tmembers={}\tracing_mode={}\tworker_budget={}\tv17_bytes={}\tv17_ms={:.3}\tv12_bytes={}\tv12_ms={:.3}\tprs1_bytes={}\tprs1_ms={:.3}\twinner={}",
+            "PITHOS_REP_TRACE\tstage=representation_race\tlevel={level}\tprs1_entropy_level={substrate_entropy_level}\tinput_bytes={}\tmembers={}\tracing_mode={}\tworker_budget={}\tv17_bytes={}\tv17_ms={:.3}\tv12_bytes={}\tv12_ms={:.3}\tprs1_bytes={}\tprs1_ms={:.3}\twinner={}",
             input.len(),
             member_lengths.len(),
             race_mode,
@@ -149,11 +169,11 @@ pub fn encode_exact_dedup(
         );
         match &substrate {
             Ok((payload, stats)) => {
-                trace_substrate_stats(input.len(), level, stats);
-                trace_substrate_planes(input.len(), level, payload);
+                trace_substrate_stats(input.len(), level, substrate_entropy_level, stats);
+                trace_substrate_planes(input.len(), level, substrate_entropy_level, payload);
             }
             Err(error) => eprintln!(
-                "PITHOS_REP_TRACE\tstage=prs1_candidate_error\tlevel={level}\tinput_bytes={}\terror={}",
+                "PITHOS_REP_TRACE\tstage=prs1_candidate_error\tlevel={level}\tprs1_entropy_level={substrate_entropy_level}\tinput_bytes={}\terror={}",
                 input.len(),
                 error
             ),
@@ -263,9 +283,14 @@ fn validate_prs1_bounds(payload: &[u8], expected_len: u64) -> Result<()> {
     Ok(())
 }
 
-fn trace_substrate_stats(input_bytes: usize, level: i32, stats: &SubstrateStats) {
+fn trace_substrate_stats(
+    input_bytes: usize,
+    level: i32,
+    substrate_entropy_level: i32,
+    stats: &SubstrateStats,
+) {
     eprintln!(
-        "PITHOS_REP_TRACE\tstage=prs1_summary\tlevel={level}\tinput_bytes={}\tencoded_bytes={}\tcells={}\traw={}\texact_ref={}\toverlay={}\toverlay_xor={}\tmixture={}\tmixture_combinadic={}\taxial={}\taxial_xor={}\taxial_even_odd={}\tdefect={}\tperiodic_defect={}\ttransition={}\tdelta_transition={}",
+        "PITHOS_REP_TRACE\tstage=prs1_summary\tlevel={level}\tprs1_entropy_level={substrate_entropy_level}\tinput_bytes={}\tencoded_bytes={}\tcells={}\traw={}\texact_ref={}\toverlay={}\toverlay_xor={}\tmixture={}\tmixture_combinadic={}\taxial={}\taxial_xor={}\taxial_even_odd={}\tdefect={}\tperiodic_defect={}\ttransition={}\tdelta_transition={}",
         input_bytes,
         stats.encoded_bytes,
         stats.cell_count,
@@ -285,7 +310,12 @@ fn trace_substrate_stats(input_bytes: usize, level: i32, stats: &SubstrateStats)
     );
 }
 
-fn trace_substrate_planes(input_bytes: usize, level: i32, payload: &[u8]) {
+fn trace_substrate_planes(
+    input_bytes: usize,
+    level: i32,
+    substrate_entropy_level: i32,
+    payload: &[u8],
+) {
     let table_bytes = match PRS1_PLANE_COUNT.checked_mul(PRS1_PLANE_RECORD_LEN) {
         Some(value) => value,
         None => return,
@@ -309,7 +339,7 @@ fn trace_substrate_planes(input_bytes: usize, level: i32, payload: &[u8]) {
             record[19],
         ]);
         eprintln!(
-            "PITHOS_REP_TRACE\tstage=prs1_plane\tlevel={level}\tinput_bytes={input_bytes}\tplane={plane_id}\tcodec_id={codec_id}\traw_bytes={raw_len}\tencoded_bytes={encoded_len}"
+            "PITHOS_REP_TRACE\tstage=prs1_plane\tlevel={level}\tprs1_entropy_level={substrate_entropy_level}\tinput_bytes={input_bytes}\tplane={plane_id}\tcodec_id={codec_id}\traw_bytes={raw_len}\tencoded_bytes={encoded_len}"
         );
     }
 }
