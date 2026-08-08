@@ -237,17 +237,23 @@ fn validate_prs1_bounds(payload: &[u8], expected_len: u64) -> Result<()> {
 
 fn trace_substrate_stats(input_bytes: usize, stats: &SubstrateStats) {
     eprintln!(
-        "PITHOS_REP_TRACE\tstage=prs1_summary\tinput_bytes={}\tencoded_bytes={}\tcells={}\traw={}\texact_ref={}\toverlay={}\tmixture={}\taxial={}\tdefect={}\ttransition={}",
+        "PITHOS_REP_TRACE\tstage=prs1_summary\tinput_bytes={}\tencoded_bytes={}\tcells={}\traw={}\texact_ref={}\toverlay={}\toverlay_xor={}\tmixture={}\tmixture_combinadic={}\taxial={}\taxial_xor={}\taxial_even_odd={}\tdefect={}\tperiodic_defect={}\ttransition={}\tdelta_transition={}",
         input_bytes,
         stats.encoded_bytes,
         stats.cell_count,
         stats.raw_cells,
         stats.exact_ref_cells,
         stats.overlay_cells,
+        stats.overlay_xor_cells,
         stats.mixture_cells,
+        stats.mixture_combinadic_cells,
         stats.axial_cells,
+        stats.axial_xor_cells,
+        stats.axial_even_odd_cells,
         stats.defect_cells,
-        stats.transition_cells
+        stats.periodic_defect_cells,
+        stats.transition_cells,
+        stats.delta_transition_cells
     );
 }
 
