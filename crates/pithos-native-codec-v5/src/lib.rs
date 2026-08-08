@@ -158,28 +158,26 @@ fn model_member(member: &[u8]) -> Result<(Vec<u8>, Model)> {
             }
         }
     }
-    if member.starts_with(b"\x89PNG\r\n\x1a\n") {
-        if let Some(parts) = parse_png(member)? {
-            let mut decoder = ZlibDecoder::new(parts.idat.as_slice());
-            if let Ok(decoded) = read_limited(&mut decoder) {
-                let canonical = zlib_encode(&decoded)?;
-                let delta = make_delta(&canonical, &parts.idat)?;
-                let metadata_cost = parts.prefix.len()
-                    + parts.gaps.iter().map(Vec::len).sum::<usize>()
-                    + delta.middle.len()
-                    + parts.lengths.len() * 4;
-                if metadata_cost < member.len() {
-                    return Ok((
-                        decoded.clone(),
-                        Model::Png {
-                            transformed_len: decoded.len() as u64,
-                            lengths: parts.lengths,
-                            prefix: parts.prefix,
-                            gaps: parts.gaps,
-                            delta,
-                        },
-                    ));
-                }
+    if member.starts_with(b"\x89PNG\r\n\x1a\n") && let Some(parts) = parse_png(member)? {
+        let mut decoder = ZlibDecoder::new(parts.idat.as_slice());
+        if let Ok(decoded) = read_limited(&mut decoder) {
+            let canonical = zlib_encode(&decoded)?;
+            let delta = make_delta(&canonical, &parts.idat)?;
+            let metadata_cost = parts.prefix.len()
+                + parts.gaps.iter().map(Vec::len).sum::<usize>()
+                + delta.middle.len()
+                + parts.lengths.len() * 4;
+            if metadata_cost < member.len() {
+                return Ok((
+                    decoded.clone(),
+                    Model::Png {
+                        transformed_len: decoded.len() as u64,
+                        lengths: parts.lengths,
+                        prefix: parts.prefix,
+                        gaps: parts.gaps,
+                        delta,
+                    },
+                ));
             }
         }
     }
