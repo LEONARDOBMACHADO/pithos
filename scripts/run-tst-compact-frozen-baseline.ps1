@@ -2,7 +2,8 @@
 param(
     [string]$Corpus = "tst_compact",
     [int]$PhaseMaxTotalMiB = 2048,
-    [string]$ExternalEvidenceRoot = ""
+    [string]$ExternalEvidenceRoot = "",
+    [switch]$IncludeLegacyDiagnostics
 )
 
 $ErrorActionPreference = 'Stop'
@@ -60,26 +61,30 @@ $inventoryExit = Invoke-PithosNativeProcess `
     )
 if ($inventoryExit -ne 0) { throw "inventory failed with exit code $inventoryExit" }
 
-Write-Host "`n=== Phase analysis benchmark (Pithos internal) ===" -ForegroundColor Cyan
-$phaseExit = Invoke-PithosNativeProcess `
-    -FilePath 'cargo' `
-    -Arguments @(
-        'run','--release','-p','pithos-bench','--bin','pithos-phasebench','--',
-        '--corpus',$corpusPath,
-        '--results',$resultsPath,
-        '--max-total-mib',[string]$PhaseMaxTotalMiB
-    )
-if ($phaseExit -ne 0) { throw "phasebench failed with exit code $phaseExit" }
+if ($IncludeLegacyDiagnostics) {
+    Write-Host "`n=== Optional legacy Phase 3 analysis diagnostic ===" -ForegroundColor Cyan
+    $phaseExit = Invoke-PithosNativeProcess `
+        -FilePath 'cargo' `
+        -Arguments @(
+            'run','--release','-p','pithos-bench','--bin','pithos-phasebench','--',
+            '--corpus',$corpusPath,
+            '--results',$resultsPath,
+            '--max-total-mib',[string]$PhaseMaxTotalMiB
+        )
+    if ($phaseExit -ne 0) { throw "phasebench failed with exit code $phaseExit" }
 
-Write-Host "`n=== Codec contribution benchmark (Pithos internal) ===" -ForegroundColor Cyan
-$codecExit = Invoke-PithosNativeProcess `
-    -FilePath 'cargo' `
-    -Arguments @(
-        'run','--release','-p','pithos-bench','--bin','pithos-codecbench','--',
-        '--corpus',$corpusPath,
-        '--results',$resultsPath
-    )
-if ($codecExit -ne 0) { throw "codecbench failed with exit code $codecExit" }
+    Write-Host "`n=== Optional standalone codec contribution diagnostic ===" -ForegroundColor Cyan
+    $codecExit = Invoke-PithosNativeProcess `
+        -FilePath 'cargo' `
+        -Arguments @(
+            'run','--release','-p','pithos-bench','--bin','pithos-codecbench','--',
+            '--corpus',$corpusPath,
+            '--results',$resultsPath
+        )
+    if ($codecExit -ne 0) { throw "codecbench failed with exit code $codecExit" }
+} else {
+    Write-Host 'Legacy phase/standalone-codec diagnostics skipped: not part of PRS1 R5 decision path.' -ForegroundColor DarkGray
+}
 
 Write-Host "`n=== Compression benchmark: PITHOS ARCHIVE-MAX ONLY ===" -ForegroundColor Cyan
 Write-Host 'Balanced is intentionally skipped for R5 because PRS1 is an ArchiveMax experiment.' -ForegroundColor Yellow
@@ -169,6 +174,7 @@ $summaryPath = Join-Path $resultsPath 'frozen-baseline-summary.txt'
     "commit=$sha",
     'benchmark_profiles=archive-max-only',
     'native_process_failure_policy=EXIT_CODE_ONLY',
+    "legacy_diagnostics_included=$([bool]$IncludeLegacyDiagnostics)",
     "cases=$($comparison.Count)",
     "successful_cases=$($ok.Count)",
     "size_wins_vs_7zip_best=$sizeWins",
