@@ -7,6 +7,7 @@
 pub use pithos_engine_legacy::*;
 
 mod adaptive_pack;
+mod archive_affinity;
 mod compat_dispatch;
 mod direct_pack;
 mod native_archive;
