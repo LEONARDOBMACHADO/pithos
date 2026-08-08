@@ -1,0 +1,30 @@
+﻿[
+    {
+        "branch":  "feat/18-lzma2-large-dict",
+        "commit":  "0075a29b9c9509a9b9aac2c0445f2627620d1d7d",
+        "compressor":  "pithos",
+        "profile":  "archive-max",
+        "original_bytes":  499318122,
+        "archive_bytes":  89030279,
+        "savings_percent":  82.169628,
+        "compress_ms":  120280.268,
+        "verify_ms":  908.594,
+        "decompress_ms":  1547.237,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    },
+    {
+        "branch":  "feat/18-lzma2-large-dict",
+        "commit":  "0075a29b9c9509a9b9aac2c0445f2627620d1d7d",
+        "compressor":  "7zip",
+        "profile":  "lzma2-mx9-solid",
+        "original_bytes":  499318122,
+        "archive_bytes":  86352019,
+        "savings_percent":  82.706011,
+        "compress_ms":  59931.32,
+        "verify_ms":  3417.897,
+        "decompress_ms":  3793.831,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    }
+]

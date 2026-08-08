@@ -60,9 +60,7 @@ fn classify(bytes: &[u8]) -> ContentClass {
             .iter()
             .filter(|byte| byte.is_ascii_graphic() || byte.is_ascii_whitespace())
             .count();
-        if sample.is_empty()
-            || printable.saturating_mul(100) >= sample.len().saturating_mul(90)
-        {
+        if sample.is_empty() || printable.saturating_mul(100) >= sample.len().saturating_mul(90) {
             return ContentClass::Text;
         }
     }
