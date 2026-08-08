@@ -254,9 +254,21 @@ function Parse-TraceLine([string]$Line) {
 }
 
 $traceRows = New-Object System.Collections.Generic.List[object]
+$currentCase = $null
+$currentProfile = $null
 Get-Content -LiteralPath $tracePath | ForEach-Object {
     $row = Parse-TraceLine $_
-    if ($null -ne $row) { $traceRows.Add($row) }
+    if ($null -eq $row) { return }
+    if ($row.stage -eq 'benchmark_case') {
+        $currentCase = $row.case
+        $currentProfile = $row.profile
+        return
+    }
+    if (-not [string]::IsNullOrWhiteSpace($currentCase)) {
+        $row | Add-Member -NotePropertyName case -NotePropertyValue $currentCase -Force
+        $row | Add-Member -NotePropertyName benchmark_profile -NotePropertyValue $currentProfile -Force
+    }
+    $traceRows.Add($row)
 }
 if ($traceRows.Count -eq 0) { throw 'No PITHOS_REP_TRACE rows captured.' }
 $traceRows | Export-Csv -LiteralPath (Join-Path $evidence.FullName 'prs1-trace.csv') -NoTypeInformation -Encoding UTF8
@@ -283,6 +295,9 @@ if ($raceRows.Count -eq 0) {
 }
 if ($summaryRows.Count -eq 0) {
     throw 'No full ArchiveMax prs1_summary rows (level=15) captured.'
+}
+if (@($raceRows | Where-Object { [string]::IsNullOrWhiteSpace($_.case) }).Count -gt 0) {
+    throw 'Full ArchiveMax race rows are missing benchmark case context.'
 }
 $expectedPlaneRows = $summaryRows.Count * 8
 if ($planeRows.Count -ne $expectedPlaneRows) {
@@ -312,6 +327,78 @@ $planeSummary = @(
 )
 $planeSummary | Export-Csv -LiteralPath (Join-Path $evidence.FullName 'prs1-plane-summary.csv') -NoTypeInformation -Encoding UTF8
 
+$raceByCase = @(
+    $raceRows |
+        Group-Object case |
+        Sort-Object Name |
+        ForEach-Object {
+            $group = @($_.Group)
+            [pscustomobject]@{
+                case = $_.Name
+                races = $group.Count
+                prs1_wins = @($group | Where-Object { $_.winner -eq 'prs1' }).Count
+                v12_wins = @($group | Where-Object { $_.winner -eq 'v12' }).Count
+                v17_wins = @($group | Where-Object { $_.winner -eq 'v17' }).Count
+                input_bytes = [int64](($group | ForEach-Object { [int64]$_.input_bytes } | Measure-Object -Maximum).Maximum)
+            }
+        }
+)
+$raceByCase | Export-Csv -LiteralPath (Join-Path $evidence.FullName 'prs1-races-by-case.csv') -NoTypeInformation -Encoding UTF8
+
+$familyByCase = @(
+    $summaryRows |
+        Group-Object case |
+        Sort-Object Name |
+        ForEach-Object {
+            $group = @($_.Group)
+            $familySum = {
+                param([string]$Property)
+                [int64](($group | ForEach-Object { if ($_.$Property) { [int64]$_.$Property } else { 0 } } | Measure-Object -Sum).Sum)
+            }
+            [pscustomobject]@{
+                case = $_.Name
+                candidates = $group.Count
+                raw = & $familySum 'raw'
+                exact_ref = & $familySum 'exact_ref'
+                overlay = & $familySum 'overlay'
+                overlay_xor = & $familySum 'overlay_xor'
+                mixture = & $familySum 'mixture'
+                mixture_combinadic = & $familySum 'mixture_combinadic'
+                axial = & $familySum 'axial'
+                axial_xor = & $familySum 'axial_xor'
+                axial_even_odd = & $familySum 'axial_even_odd'
+                defect = & $familySum 'defect'
+                periodic_defect = & $familySum 'periodic_defect'
+                transition = & $familySum 'transition'
+                delta_transition = & $familySum 'delta_transition'
+            }
+        }
+)
+$familyByCase | Export-Csv -LiteralPath (Join-Path $evidence.FullName 'prs1-families-by-case.csv') -NoTypeInformation -Encoding UTF8
+
+$planeByCase = @(
+    $planeRows |
+        Group-Object case,plane |
+        ForEach-Object {
+            $group = @($_.Group)
+            $rawBytes = [int64](($group | ForEach-Object { [int64]$_.raw_bytes } | Measure-Object -Sum).Sum)
+            $encodedBytes = [int64](($group | ForEach-Object { [int64]$_.encoded_bytes } | Measure-Object -Sum).Sum)
+            [pscustomobject]@{
+                case = $group[0].case
+                plane = [int]$group[0].plane
+                records = $group.Count
+                raw_bytes = $rawBytes
+                encoded_bytes = $encodedBytes
+                savings_bytes = $rawBytes - $encodedBytes
+                store_records = @($group | Where-Object { $_.codec_id -eq '0' }).Count
+                zstd_records = @($group | Where-Object { $_.codec_id -eq '1' }).Count
+                lzma2_records = @($group | Where-Object { $_.codec_id -eq '3' }).Count
+            }
+        } |
+        Sort-Object case,plane
+)
+$planeByCase | Export-Csv -LiteralPath (Join-Path $evidence.FullName 'prs1-planes-by-case.csv') -NoTypeInformation -Encoding UTF8
+
 $prs1Wins = @($raceRows | Where-Object { $_.winner -eq 'prs1' }).Count
 $v12Wins = @($raceRows | Where-Object { $_.winner -eq 'v12' }).Count
 $v17Wins = @($raceRows | Where-Object { $_.winner -eq 'v17' }).Count
@@ -333,6 +420,7 @@ $summaryPath = Join-Path $evidence.FullName 'PRS1_R5_SUMMARY.txt'
     'native_process_failure_policy=EXIT_CODE_ONLY',
     'benchmark_profiles=archive-max-only',
     'evidence_scope=full_archive_max_level_15_only',
+    "cases_with_full_races=$($raceByCase.Count)",
     "representation_races=$($raceRows.Count)",
     "prs1_wins=$prs1Wins",
     "v12_wins=$v12Wins",
@@ -370,6 +458,8 @@ $summaryPath = Join-Path $evidence.FullName 'PRS1_R5_SUMMARY.txt'
 
 Write-Host "`n=== PRS1 R5 RESULT ===" -ForegroundColor Green
 Get-Content -LiteralPath $summaryPath | ForEach-Object { Write-Host $_ }
+Write-Host "Race-by-case summary: $(Join-Path $evidence.FullName 'prs1-races-by-case.csv')"
+Write-Host "Family-by-case summary: $(Join-Path $evidence.FullName 'prs1-families-by-case.csv')"
 Write-Host "Physical plane summary: $(Join-Path $evidence.FullName 'prs1-plane-summary.csv')"
 Write-Host "Evidence: $($evidence.FullName)"
 Write-Host "Trace: $tracePath"
