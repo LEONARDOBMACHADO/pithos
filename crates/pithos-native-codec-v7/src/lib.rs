@@ -191,14 +191,14 @@ fn encode_member(input: &[u8], bases: &[[u8; BASE_LEN]]) -> Result<Vec<u8>> {
         }
         if p + BASE_LEN <= input.len() {
             let slice = &input[p..p + BASE_LEN];
-            if let Some(ids) = lookup.get(&xxh3_64(slice)) {
-                if let Some(&id) = ids.iter().find(|&&id| bases[id].as_slice() == slice) {
-                    flush(&mut lit, &mut o);
-                    o.push(1);
-                    put_var(id as u64, &mut o);
-                    p += BASE_LEN;
-                    continue;
-                }
+            if let Some(ids) = lookup.get(&xxh3_64(slice))
+                && let Some(&id) = ids.iter().find(|&&id| bases[id].as_slice() == slice)
+            {
+                flush(&mut lit, &mut o);
+                o.push(1);
+                put_var(id as u64, &mut o);
+                p += BASE_LEN;
+                continue;
             }
         }
         lit.push(input[p]);
