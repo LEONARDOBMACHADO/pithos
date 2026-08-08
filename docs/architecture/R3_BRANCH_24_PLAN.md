@@ -1,0 +1,1 @@
+Branch 24 will parallelize native verify/unpack across independent solid groups without changing archive payload bytes.
