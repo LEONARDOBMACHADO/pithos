@@ -252,14 +252,12 @@ fn pdf_ranges(d: &[u8]) -> Vec<(usize, usize, Kind)> {
                 }
             }
         }
-        if let Some(end) = accepted {
-            if out.last().is_none_or(|(_, prev, _)| start >= *prev) {
-                out.push((start, end, Kind::Zlib));
-            }
-            search = raw_end + 9;
-        } else {
-            search = raw_end + 9;
+        if let Some(end) = accepted
+            && out.last().is_none_or(|(_, prev, _)| start >= *prev)
+        {
+            out.push((start, end, Kind::Zlib));
         }
+        search = raw_end + 9;
     }
     out
 }
