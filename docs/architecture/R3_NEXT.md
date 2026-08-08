@@ -1,0 +1,1 @@
+Next: parallel native read path, global canonical pool, motifs, seeded references, quaternary context experiment, global planner.
