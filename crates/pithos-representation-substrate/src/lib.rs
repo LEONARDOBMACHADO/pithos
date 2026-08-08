@@ -738,15 +738,19 @@ fn choose_candidate(
     let mut template_bases =
         Vec::with_capacity(TEMPLATE_WINDOW + SAME_LENGTH_TEMPLATE_WINDOW + 2);
     let fingerprint = coarse_fingerprint(bytes);
-    if let Some(base) = coarse_anchor.get(&fingerprint).copied() {
-        if base < index {
-            template_bases.push(base);
-        }
+    if let Some(base) = coarse_anchor
+        .get(&fingerprint)
+        .copied()
+        .filter(|base| *base < index)
+    {
+        template_bases.push(base);
     }
-    if let Some(base) = same_length_anchor.get(&bytes.len()).copied() {
-        if base < index && !template_bases.contains(&base) {
-            template_bases.push(base);
-        }
+    if let Some(base) = same_length_anchor
+        .get(&bytes.len())
+        .copied()
+        .filter(|base| *base < index && !template_bases.contains(base))
+    {
+        template_bases.push(base);
     }
     if let Some(queue) = coarse.get(&fingerprint) {
         for base in queue.iter().copied().rev().take(TEMPLATE_WINDOW) {
