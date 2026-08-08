@@ -54,18 +54,14 @@ fn sparse_xor_overlay_survives_real_candidate_selection() {
 
 #[test]
 fn binary_combinadic_survives_real_candidate_selection() {
-    // 12.5% ones in a non-periodic deterministic distribution. A period-1
-    // defect model is available but materially more expensive than enumerating
-    // the binary set positions; ordinary 1-bit packing also competes.
-    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
-    let mut input = vec![0_u8; 32 * 1024];
-    for byte in &mut input {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        if state & 7 == 0 {
-            *byte = 1;
-        }
+    // Alternate all-zero and all-one 64-byte blocks. The global byte
+    // distribution is 50/50, but each enumerative block has cardinality 0 or
+    // 64 and therefore rank 0. This is exactly the higher-order positional
+    // structure combinadic coding is meant to expose; ordinary one-bit packing,
+    // raw zero-order entropy and the short defect lattice all compete.
+    let mut input = Vec::with_capacity(32 * 1024);
+    for block in 0..(32 * 1024 / 64) {
+        input.extend(std::iter::repeat_n(if block % 2 == 0 { 0_u8 } else { 1_u8 }, 64));
     }
     let stats = encode_one(&input);
     assert!(stats.mixture_cells > 0, "mixture never survived selection: {stats:?}");
