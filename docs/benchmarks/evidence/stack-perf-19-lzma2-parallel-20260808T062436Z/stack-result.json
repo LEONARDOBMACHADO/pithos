@@ -1,0 +1,30 @@
+﻿[
+    {
+        "branch":  "perf/19-lzma2-parallel",
+        "commit":  "48d9a694cfe4fbea21983abf3e3dd30e3cc50fd6",
+        "compressor":  "pithos",
+        "profile":  "archive-max",
+        "original_bytes":  499318122,
+        "archive_bytes":  89030279,
+        "savings_percent":  82.169628,
+        "compress_ms":  118953.756,
+        "verify_ms":  1024.397,
+        "decompress_ms":  1638.718,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    },
+    {
+        "branch":  "perf/19-lzma2-parallel",
+        "commit":  "48d9a694cfe4fbea21983abf3e3dd30e3cc50fd6",
+        "compressor":  "7zip",
+        "profile":  "lzma2-mx9-solid",
+        "original_bytes":  499318122,
+        "archive_bytes":  86352018,
+        "savings_percent":  82.706012,
+        "compress_ms":  56476.014,
+        "verify_ms":  3209.907,
+        "decompress_ms":  3841.121,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    }
+]
