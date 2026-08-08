@@ -183,7 +183,10 @@ fn encode_cluster(cluster: &Cluster<'_>, level: i32) -> Result<EncodedCluster> {
 fn make_clusters(members: Vec<Member<'_>>) -> Vec<Cluster<'_>> {
     let mut grouped = BTreeMap::<Class, Vec<Member<'_>>>::new();
     for member in members {
-        grouped.entry(classify(member.bytes)).or_default().push(member);
+        grouped
+            .entry(classify(member.bytes))
+            .or_default()
+            .push(member);
     }
     grouped
         .into_iter()
@@ -196,7 +199,9 @@ fn split_members<'a>(input: &'a [u8], lengths: &[u64]) -> Result<Vec<Member<'a>>
     let mut offset = 0_usize;
     for (index, length) in lengths.iter().enumerate() {
         let length = usize::try_from(*length).map_err(|_| PithosError::IntegerOverflow)?;
-        let end = offset.checked_add(length).ok_or(PithosError::IntegerOverflow)?;
+        let end = offset
+            .checked_add(length)
+            .ok_or(PithosError::IntegerOverflow)?;
         members.push(Member {
             index: u32::try_from(index).map_err(|_| PithosError::IntegerOverflow)?,
             bytes: input.get(offset..end).ok_or(PithosError::InvalidRange)?,
@@ -278,6 +283,9 @@ mod tests {
         input.extend_from_slice(&text);
         let lengths = [imageish.len() as u64, text.len() as u64];
         let (payload, _) = encode_exact_dedup(&input, &lengths, 5).unwrap();
-        assert_eq!(decode_exact_dedup(&payload, input.len() as u64).unwrap(), input);
+        assert_eq!(
+            decode_exact_dedup(&payload, input.len() as u64).unwrap(),
+            input
+        );
     }
 }
