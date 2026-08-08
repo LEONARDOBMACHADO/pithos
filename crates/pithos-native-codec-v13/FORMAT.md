@@ -1,0 +1,1 @@
+PN13 envelope: magic/version/inner-codec/original-length/representation-length/chunk-count/canonical-count/gross-duplicate-bytes/reference-stream-length/flags, followed by the entropy-coded representation. The representation starts with varint/RLE chunk references and then varint-length canonical chunks.
