@@ -12,9 +12,33 @@ $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Set-Location $repo
 
 $nativeHelper = Join-Path $PSScriptRoot 'native-process.ps1'
-if (-not (Test-Path -LiteralPath $nativeHelper -PathType Leaf)) {
-    throw "Native process helper not found: $nativeHelper"
+$analyzer = Join-Path $PSScriptRoot 'analyze-prs1-r5-trace.ps1'
+$frozenRunner = Join-Path $PSScriptRoot 'run-tst-compact-frozen-baseline.ps1'
+foreach ($required in @($nativeHelper, $analyzer, $frozenRunner)) {
+    if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
+        throw "Required R5 script not found: $required"
+    }
 }
+
+function Assert-PowerShellSyntax([string]$Path) {
+    $tokens = $null
+    $parseErrors = $null
+    [System.Management.Automation.Language.Parser]::ParseFile(
+        $Path,
+        [ref]$tokens,
+        [ref]$parseErrors
+    ) | Out-Null
+    if ($parseErrors.Count -gt 0) {
+        $parseErrors | Format-List * | Out-String | Write-Host
+        throw "PowerShell syntax error(s): $Path"
+    }
+}
+
+foreach ($script in @($PSCommandPath, $nativeHelper, $analyzer, $frozenRunner)) {
+    Assert-PowerShellSyntax $script
+}
+Write-Host 'R5 POWERSHELL PARSE: PASS' -ForegroundColor Green
+
 . $nativeHelper
 
 $branch = (& git branch --show-current).Trim()
@@ -53,10 +77,33 @@ if ($unexpected.Count -gt 0) {
     throw 'Unexpected local changes before PRS1 R5.'
 }
 
+Write-Host '=== PRS1 R5 NATIVE STDERR CONTRACT ===' -ForegroundColor Cyan
+$stderrProbe = Join-Path $env:TEMP "pithos-r5-stderr-probe-$PID.log"
+try {
+    $stderrProbeExit = Invoke-PithosNativeProcess `
+        -FilePath 'powershell' `
+        -Arguments @(
+            '-NoProfile',
+            '-Command',
+            '[Console]::Error.WriteLine("R5_STDERR_PROBE"); exit 0'
+        ) `
+        -LogPath $stderrProbe
+    if ($stderrProbeExit -ne 0) {
+        throw "R5 stderr probe returned exit code $stderrProbeExit"
+    }
+    if (-not (Select-String -LiteralPath $stderrProbe -SimpleMatch 'R5_STDERR_PROBE' -Quiet)) {
+        throw 'R5 stderr probe output was not preserved in the native-process log.'
+    }
+    Write-Host 'R5 STDERR PROBE: PASS (stderr preserved; exit code controls failure)' -ForegroundColor Green
+} finally {
+    Remove-Item -LiteralPath $stderrProbe -Force -ErrorAction SilentlyContinue
+}
+
 # A new workspace crate must be represented by a Cargo-generated lockfile before
 # any benchmark is accepted. Never benchmark an uncommitted dependency graph.
-$lockHasSubstrate = Select-String -LiteralPath (Join-Path $repo 'Cargo.lock') `
-    -SimpleMatch 'name = "pithos-representation-substrate"' -Quiet
+$lockPath = Join-Path $repo 'Cargo.lock'
+$lockHasSubstrate = (Test-Path -LiteralPath $lockPath -PathType Leaf) -and
+    (Select-String -LiteralPath $lockPath -SimpleMatch 'name = "pithos-representation-substrate"' -Quiet)
 if (-not $lockHasSubstrate) {
     Write-Host '=== PRS1 R5 LOCKFILE PREPARATION ===' -ForegroundColor Yellow
     $generateLockExit = Invoke-PithosNativeProcess `
@@ -78,16 +125,17 @@ if (-not $lockHasSubstrate) {
     if (-not $cargoLockChanged) {
         throw 'Cargo.lock did not change as expected after adding PRS1 workspace crate.'
     }
+    if (-not (Select-String -LiteralPath $lockPath -SimpleMatch 'name = "pithos-representation-substrate"' -Quiet)) {
+        throw 'Cargo-generated lockfile still does not contain pithos-representation-substrate.'
+    }
 
-    Write-Host "`n===== CARGO.LOCK GENERATED DIFF =====" -ForegroundColor Cyan
+    Write-Host "`n===== CARGO-GENERATED LOCKFILE DIFF =====" -ForegroundColor Cyan
     & git diff -- Cargo.lock
-    Write-Host "`nSTOP: commit the Cargo-generated lockfile upstream before R5 benchmark." -ForegroundColor Yellow
-    Write-Host 'Do not edit Cargo.lock manually. Return this diff and git status.'
+    Write-Host "`nSTOP: commit only the Cargo-generated Cargo.lock, then rerun R5." -ForegroundColor Yellow
+    Write-Host 'Do not edit Cargo.lock manually.'
     exit 23
 }
 
-# From this point onward the dependency graph must already be committed and
-# reproducible. --locked prevents Cargo from silently repairing it during gates.
 Write-Host '=== PRS1 R5 LOCKFILE REPRODUCIBILITY ===' -ForegroundColor Cyan
 $metadataExit = Invoke-PithosNativeProcess `
     -FilePath 'cargo' `
@@ -100,52 +148,46 @@ if ($metadataExit -ne 0) {
 $gateRoot = if ([string]::IsNullOrWhiteSpace($ExternalEvidenceRoot)) {
     Join-Path $env:TEMP 'pithos-prs1-r5-gates'
 } else {
-    $ExternalEvidenceRoot
+    Join-Path $ExternalEvidenceRoot 'gates'
 }
 New-Item -ItemType Directory -Force -Path $gateRoot | Out-Null
 $gateTimestamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
 $clippyMapLog = Join-Path $gateRoot "prs1-r5-clippy-map-$gateTimestamp.log"
 $strictLog = Join-Path $gateRoot "prs1-r5-clippy-strict-$gateTimestamp.log"
 
-Write-Host "`n=== PRS1 R5 STATIC GATE 1/5: RUSTFMT ===" -ForegroundColor Cyan
+Write-Host "`n=== R5 STATIC GATE 1/5: RUSTFMT ===" -ForegroundColor Cyan
 $fmtExit = Invoke-PithosNativeProcess `
     -FilePath 'cargo' `
     -Arguments @('fmt','--all','--','--check')
 if ($fmtExit -ne 0) {
-    throw "cargo fmt --all -- --check failed with exit code $fmtExit. Run cargo fmt --all in a dedicated source-fix commit; do not benchmark."
+    throw "cargo fmt --all -- --check failed with exit code $fmtExit. STOP before benchmark."
 }
 
-# Run a complete non-strict workspace Clippy FIRST. This deliberately discovers
-# the full warning surface in one pass so R5 cannot repeat the R4 cycle of fixing
-# one compiler blocker only to reveal the next warning on the following run.
-Write-Host "`n=== PRS1 R5 STATIC GATE 2/5: COMPLETE CLIPPY WARNING MAP ===" -ForegroundColor Cyan
+Write-Host "`n=== R5 STATIC GATE 2/5: COMPLETE CLIPPY WARNING MAP ===" -ForegroundColor Cyan
 $clippyMapExit = Invoke-PithosNativeProcess `
     -FilePath 'cargo' `
     -Arguments @('clippy','--workspace','--all-targets') `
     -LogPath $clippyMapLog
 if ($clippyMapExit -ne 0) {
-    Stop-WithLog "Workspace Clippy map failed to compile with exit code $clippyMapExit. STOP before tests/benchmark." $clippyMapLog
+    Stop-WithLog "Workspace Clippy map failed with exit code $clippyMapExit. STOP before tests/benchmark." $clippyMapLog
 }
-
 $warningLines = @(Select-String -LiteralPath $clippyMapLog -Pattern '(^|\s)warning:' -CaseSensitive:$false)
 if ($warningLines.Count -gt 0) {
-    Write-Host "`nDetected $($warningLines.Count) warning line(s)." -ForegroundColor Red
-    Write-Host 'The complete map is printed so all warnings can be repaired in one source pass.' -ForegroundColor Yellow
-    Stop-WithLog 'Workspace is not warning-clean. STOP before strict Clippy/tests/benchmark.' $clippyMapLog
+    Stop-WithLog "Workspace is not warning-clean: $($warningLines.Count) warning line(s)." $clippyMapLog
 }
 Write-Host 'COMPLETE CLIPPY WARNING MAP: 0 warnings' -ForegroundColor Green
 
-Write-Host "`n=== PRS1 R5 STATIC GATE 3/5: STRICT CLIPPY ===" -ForegroundColor Cyan
+Write-Host "`n=== R5 STATIC GATE 3/5: STRICT CLIPPY ===" -ForegroundColor Cyan
 $strictExit = Invoke-PithosNativeProcess `
     -FilePath 'cargo' `
     -Arguments @('clippy','--workspace','--all-targets','--','-D','warnings') `
     -LogPath $strictLog
 if ($strictExit -ne 0) {
-    Stop-WithLog "Workspace strict Clippy failed with exit code $strictExit. STOP before tests/benchmark." $strictLog
+    Stop-WithLog "Workspace strict Clippy failed with exit code $strictExit." $strictLog
 }
-Write-Host 'STRICT CLIPPY PASS' -ForegroundColor Green
+Write-Host 'STRICT CLIPPY: PASS' -ForegroundColor Green
 
-Write-Host "`n=== PRS1 R5 STATIC GATE 4/5: TARGETED ROUNDTRIP TESTS ===" -ForegroundColor Cyan
+Write-Host "`n=== R5 STATIC GATE 4/5: TARGETED ROUNDTRIP TESTS ===" -ForegroundColor Cyan
 $targetedTestsExit = Invoke-PithosNativeProcess `
     -FilePath 'cargo' `
     -Arguments @('test','-p','pithos-representation-substrate','-p','pithos-native-codec-v18')
@@ -153,72 +195,60 @@ if ($targetedTestsExit -ne 0) {
     throw "PRS1/native-v18 tests failed with exit code $targetedTestsExit."
 }
 
-Write-Host "`n=== PRS1 R5 STATIC GATE 5/5: WORKSPACE REGRESSION + RELEASE ===" -ForegroundColor Cyan
+Write-Host "`n=== R5 STATIC GATE 5/5: WORKSPACE REGRESSION + RELEASE ===" -ForegroundColor Cyan
 $workspaceTestsExit = Invoke-PithosNativeProcess `
     -FilePath 'cargo' `
     -Arguments @('test','--workspace')
 if ($workspaceTestsExit -ne 0) {
     throw "workspace tests failed with exit code $workspaceTestsExit."
 }
-
 $releaseExit = Invoke-PithosNativeProcess `
     -FilePath 'cargo' `
     -Arguments @('build','--release','-p','pithos-cli')
 if ($releaseExit -ne 0) {
     throw "release CLI build failed with exit code $releaseExit."
 }
-
 $diffCheckExit = Invoke-PithosNativeProcess `
     -FilePath 'git' `
     -Arguments @('diff','--check')
 if ($diffCheckExit -ne 0) {
-    throw "git diff --check failed after gates with exit code $diffCheckExit."
+    throw "git diff --check failed with exit code $diffCheckExit."
 }
 
 $shaAfterGates = (& git rev-parse HEAD).Trim()
 if ($shaAfterGates -ne $sha) {
     throw "HEAD changed while gates were running. before=$sha after=$shaAfterGates"
 }
-
 $unexpected = @(Get-UnexpectedStatus)
 if ($unexpected.Count -gt 0) {
-    Write-Host 'Build/gates produced tracked changes:' -ForegroundColor Red
-    $unexpected | ForEach-Object { Write-Host $_ }
-    throw 'STOP before benchmark. Return status; do not repair source manually.'
+    $unexpected | ForEach-Object { Write-Host $_ -ForegroundColor Red }
+    throw 'Gates produced unexpected tracked/local changes. STOP before benchmark.'
 }
 
-Write-Host "`n=== PRS1 R5 PRE-BENCHMARK CONTRACT PASS ===" -ForegroundColor Green
+Write-Host "`n=== PRS1 R5 PRE-BENCHMARK CONTRACT: PASS ===" -ForegroundColor Green
 Write-Host "source_commit=$sha"
 Write-Host 'native_process_failure_policy=EXIT_CODE_ONLY'
 Write-Host 'benchmark_profiles=archive-max-only'
-Write-Host 'fmt=PASS'
 Write-Host 'clippy_warning_map=0'
-Write-Host 'strict_clippy=PASS'
-Write-Host 'targeted_tests=PASS'
-Write-Host 'workspace_tests=PASS'
-Write-Host 'release_build=PASS'
-Write-Host 'git_diff_check=PASS'
 
-$traceRoot = if ([string]::IsNullOrWhiteSpace($ExternalEvidenceRoot)) {
-    Join-Path $env:TEMP 'pithos-prs1-r5'
-} else {
-    $ExternalEvidenceRoot
-}
+$traceRoot = Join-Path $env:TEMP 'pithos-prs1-r5'
 New-Item -ItemType Directory -Force -Path $traceRoot | Out-Null
 $timestamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
 $tracePath = Join-Path $traceRoot "prs1-r5-trace-$timestamp.log"
+$benchmarkStartedUtc = [DateTime]::UtcNow
 
 Write-Host "`n=== PRS1 R5 PITHOS-ONLY FROZEN-BASELINE BENCHMARK ===" -ForegroundColor Cyan
 Write-Host '7-Zip/WinRAR/WinZip executables are not run.' -ForegroundColor Yellow
 $env:PITHOS_REP_TRACE = '1'
 try {
+    # The child does not copy evidence externally. The parent enriches local
+    # evidence first and performs one final atomic-ish directory refresh below.
     $benchmarkArguments = @(
         '-NoProfile',
         '-ExecutionPolicy','Bypass',
-        '-File',(Join-Path $PSScriptRoot 'run-tst-compact-frozen-baseline.ps1'),
+        '-File',$frozenRunner,
         '-Corpus',$Corpus,
-        '-PhaseMaxTotalMiB',[string]$PhaseMaxTotalMiB,
-        '-ExternalEvidenceRoot',$ExternalEvidenceRoot
+        '-PhaseMaxTotalMiB',[string]$PhaseMaxTotalMiB
     )
     $benchmarkExit = Invoke-PithosNativeProcess `
         -FilePath 'powershell' `
@@ -233,234 +263,47 @@ if ($benchmarkExit -ne 0) {
 
 $evidenceRoot = Join-Path $repo 'docs\benchmarks\evidence'
 $evidence = Get-ChildItem -LiteralPath $evidenceRoot -Directory -Filter 'frozen-feat-31-representation-substrate-*' |
+    Where-Object { $_.LastWriteTimeUtc -ge $benchmarkStartedUtc.AddSeconds(-5) } |
     Sort-Object LastWriteTimeUtc -Descending |
     Select-Object -First 1
-if ($null -eq $evidence) { throw 'Frozen-baseline evidence directory not found.' }
+if ($null -eq $evidence) {
+    throw 'R5 evidence directory from this benchmark run was not found.'
+}
+
 Copy-Item -LiteralPath $tracePath -Destination (Join-Path $evidence.FullName 'prs1-representation-trace.log') -Force
 
-function Parse-TraceLine([string]$Line) {
-    $marker = 'PITHOS_REP_TRACE'
-    $markerIndex = $Line.IndexOf($marker, [System.StringComparison]::Ordinal)
-    if ($markerIndex -lt 0) { return $null }
-    $trace = $Line.Substring($markerIndex)
-    $map = [ordered]@{}
-    foreach ($part in ($trace -split "`t")) {
-        if ($part -eq $marker) { continue }
-        $pair = $part -split '=', 2
-        if ($pair.Count -eq 2) { $map[$pair[0]] = $pair[1] }
-    }
-    if ($map.Count -eq 0) { return $null }
-    return [pscustomobject]$map
+$analyzerExit = Invoke-PithosNativeProcess `
+    -FilePath 'powershell' `
+    -Arguments @(
+        '-NoProfile',
+        '-ExecutionPolicy','Bypass',
+        '-File',$analyzer,
+        '-TracePath',$tracePath,
+        '-EvidencePath',$evidence.FullName,
+        '-Branch',$branch,
+        '-SourceCommit',$sha
+    )
+if ($analyzerExit -ne 0) {
+    throw "PRS1 R5 trace analysis failed with exit code $analyzerExit. Evidence=$($evidence.FullName)"
 }
 
-$traceRows = New-Object System.Collections.Generic.List[object]
-$currentCase = $null
-$currentProfile = $null
-Get-Content -LiteralPath $tracePath | ForEach-Object {
-    $row = Parse-TraceLine $_
-    if ($null -eq $row) { return }
-    if ($row.stage -eq 'benchmark_case') {
-        $currentCase = $row.case
-        $currentProfile = $row.profile
-        return
-    }
-    if (-not [string]::IsNullOrWhiteSpace($currentCase)) {
-        $row | Add-Member -NotePropertyName case -NotePropertyValue $currentCase -Force
-        $row | Add-Member -NotePropertyName benchmark_profile -NotePropertyValue $currentProfile -Force
-    }
-    $traceRows.Add($row)
-}
-if ($traceRows.Count -eq 0) { throw 'No PITHOS_REP_TRACE rows captured.' }
-$traceRows | Export-Csv -LiteralPath (Join-Path $evidence.FullName 'prs1-trace.csv') -NoTypeInformation -Encoding UTF8
-
-$allRaceRows = @($traceRows | Where-Object { $_.stage -eq 'representation_race' })
-$allSummaryRows = @($traceRows | Where-Object { $_.stage -eq 'prs1_summary' })
-$allPlaneRows = @($traceRows | Where-Object { $_.stage -eq 'prs1_plane' })
-$probeRaceRows = @($allRaceRows | Where-Object { $_.level -eq '3' })
-$probeSummaryRows = @($allSummaryRows | Where-Object { $_.level -eq '3' })
-$probePlaneRows = @($allPlaneRows | Where-Object { $_.level -eq '3' })
-$raceRows = @($allRaceRows | Where-Object { $_.level -eq '15' })
-$summaryRows = @($allSummaryRows | Where-Object { $_.level -eq '15' })
-$planeRows = @($allPlaneRows | Where-Object { $_.level -eq '15' })
-$unexpectedLevels = @(
-    $allRaceRows + $allSummaryRows + $allPlaneRows |
-        Where-Object { $_.level -notin @('3','15') }
-)
-if ($unexpectedLevels.Count -gt 0) {
-    $unexpectedLevels | Export-Csv -LiteralPath (Join-Path $evidence.FullName 'prs1-unexpected-trace-levels.csv') -NoTypeInformation -Encoding UTF8
-    throw "Unexpected PRS1 trace level(s) found: $($unexpectedLevels.Count). Evidence would be ambiguous."
-}
-if ($raceRows.Count -eq 0) {
-    throw 'No full ArchiveMax representation_race rows (level=15) captured.'
-}
-if ($summaryRows.Count -eq 0) {
-    throw 'No full ArchiveMax prs1_summary rows (level=15) captured.'
-}
-if (@($raceRows | Where-Object { [string]::IsNullOrWhiteSpace($_.case) }).Count -gt 0) {
-    throw 'Full ArchiveMax race rows are missing benchmark case context.'
-}
-$expectedPlaneRows = $summaryRows.Count * 8
-if ($planeRows.Count -ne $expectedPlaneRows) {
-    throw "Physical PRS1 plane evidence incomplete: actual=$($planeRows.Count) expected=$expectedPlaneRows"
-}
-$planeRows | Export-Csv -LiteralPath (Join-Path $evidence.FullName 'prs1-plane-trace.csv') -NoTypeInformation -Encoding UTF8
-
-$planeSummary = @(
-    $planeRows |
-        Group-Object plane |
-        Sort-Object { [int]$_.Name } |
-        ForEach-Object {
-            $group = @($_.Group)
-            $rawBytes = [int64](($group | ForEach-Object { [int64]$_.raw_bytes } | Measure-Object -Sum).Sum)
-            $encodedBytes = [int64](($group | ForEach-Object { [int64]$_.encoded_bytes } | Measure-Object -Sum).Sum)
-            [pscustomobject]@{
-                plane = [int]$_.Name
-                records = $group.Count
-                raw_bytes = $rawBytes
-                encoded_bytes = $encodedBytes
-                savings_bytes = $rawBytes - $encodedBytes
-                store_records = @($group | Where-Object { $_.codec_id -eq '0' }).Count
-                zstd_records = @($group | Where-Object { $_.codec_id -eq '1' }).Count
-                lzma2_records = @($group | Where-Object { $_.codec_id -eq '3' }).Count
-            }
-        }
-)
-$planeSummary | Export-Csv -LiteralPath (Join-Path $evidence.FullName 'prs1-plane-summary.csv') -NoTypeInformation -Encoding UTF8
-
-$raceByCase = @(
-    $raceRows |
-        Group-Object case |
-        Sort-Object Name |
-        ForEach-Object {
-            $group = @($_.Group)
-            [pscustomobject]@{
-                case = $_.Name
-                races = $group.Count
-                prs1_wins = @($group | Where-Object { $_.winner -eq 'prs1' }).Count
-                v12_wins = @($group | Where-Object { $_.winner -eq 'v12' }).Count
-                v17_wins = @($group | Where-Object { $_.winner -eq 'v17' }).Count
-                input_bytes = [int64](($group | ForEach-Object { [int64]$_.input_bytes } | Measure-Object -Maximum).Maximum)
-            }
-        }
-)
-$raceByCase | Export-Csv -LiteralPath (Join-Path $evidence.FullName 'prs1-races-by-case.csv') -NoTypeInformation -Encoding UTF8
-
-$familyByCase = @(
-    $summaryRows |
-        Group-Object case |
-        Sort-Object Name |
-        ForEach-Object {
-            $group = @($_.Group)
-            $familySum = {
-                param([string]$Property)
-                [int64](($group | ForEach-Object { if ($_.$Property) { [int64]$_.$Property } else { 0 } } | Measure-Object -Sum).Sum)
-            }
-            [pscustomobject]@{
-                case = $_.Name
-                candidates = $group.Count
-                raw = & $familySum 'raw'
-                exact_ref = & $familySum 'exact_ref'
-                overlay = & $familySum 'overlay'
-                overlay_xor = & $familySum 'overlay_xor'
-                mixture = & $familySum 'mixture'
-                mixture_combinadic = & $familySum 'mixture_combinadic'
-                axial = & $familySum 'axial'
-                axial_xor = & $familySum 'axial_xor'
-                axial_even_odd = & $familySum 'axial_even_odd'
-                defect = & $familySum 'defect'
-                periodic_defect = & $familySum 'periodic_defect'
-                transition = & $familySum 'transition'
-                delta_transition = & $familySum 'delta_transition'
-            }
-        }
-)
-$familyByCase | Export-Csv -LiteralPath (Join-Path $evidence.FullName 'prs1-families-by-case.csv') -NoTypeInformation -Encoding UTF8
-
-$planeByCase = @(
-    $planeRows |
-        Group-Object case,plane |
-        ForEach-Object {
-            $group = @($_.Group)
-            $rawBytes = [int64](($group | ForEach-Object { [int64]$_.raw_bytes } | Measure-Object -Sum).Sum)
-            $encodedBytes = [int64](($group | ForEach-Object { [int64]$_.encoded_bytes } | Measure-Object -Sum).Sum)
-            [pscustomobject]@{
-                case = $group[0].case
-                plane = [int]$group[0].plane
-                records = $group.Count
-                raw_bytes = $rawBytes
-                encoded_bytes = $encodedBytes
-                savings_bytes = $rawBytes - $encodedBytes
-                store_records = @($group | Where-Object { $_.codec_id -eq '0' }).Count
-                zstd_records = @($group | Where-Object { $_.codec_id -eq '1' }).Count
-                lzma2_records = @($group | Where-Object { $_.codec_id -eq '3' }).Count
-            }
-        } |
-        Sort-Object case,plane
-)
-$planeByCase | Export-Csv -LiteralPath (Join-Path $evidence.FullName 'prs1-planes-by-case.csv') -NoTypeInformation -Encoding UTF8
-
-$prs1Wins = @($raceRows | Where-Object { $_.winner -eq 'prs1' }).Count
-$v12Wins = @($raceRows | Where-Object { $_.winner -eq 'v12' }).Count
-$v17Wins = @($raceRows | Where-Object { $_.winner -eq 'v17' }).Count
-$probePrs1Wins = @($probeRaceRows | Where-Object { $_.winner -eq 'prs1' }).Count
-$probeV12Wins = @($probeRaceRows | Where-Object { $_.winner -eq 'v12' }).Count
-$probeV17Wins = @($probeRaceRows | Where-Object { $_.winner -eq 'v17' }).Count
-
-$sum = {
-    param([string]$Property)
-    [int64](($summaryRows | ForEach-Object { if ($_.$Property) { [int64]$_.$Property } else { 0 } } | Measure-Object -Sum).Sum)
-}
-$planeRawTotal = [int64](($planeRows | ForEach-Object { [int64]$_.raw_bytes } | Measure-Object -Sum).Sum)
-$planeEncodedTotal = [int64](($planeRows | ForEach-Object { [int64]$_.encoded_bytes } | Measure-Object -Sum).Sum)
 $summaryPath = Join-Path $evidence.FullName 'PRS1_R5_SUMMARY.txt'
-@(
-    "timestamp_utc=$((Get-Date).ToUniversalTime().ToString('o'))",
-    "branch=$branch",
-    "source_commit=$sha",
-    'native_process_failure_policy=EXIT_CODE_ONLY',
-    'benchmark_profiles=archive-max-only',
-    'evidence_scope=full_archive_max_level_15_only',
-    "cases_with_full_races=$($raceByCase.Count)",
-    "representation_races=$($raceRows.Count)",
-    "prs1_wins=$prs1Wins",
-    "v12_wins=$v12Wins",
-    "v17_wins=$v17Wins",
-    "prs1_candidate_summaries=$($summaryRows.Count)",
-    "physical_plane_records=$($planeRows.Count)",
-    "physical_plane_raw_bytes=$planeRawTotal",
-    "physical_plane_encoded_bytes=$planeEncodedTotal",
-    "physical_plane_store_records=$(@($planeRows | Where-Object { $_.codec_id -eq '0' }).Count)",
-    "physical_plane_zstd_records=$(@($planeRows | Where-Object { $_.codec_id -eq '1' }).Count)",
-    "physical_plane_lzma2_records=$(@($planeRows | Where-Object { $_.codec_id -eq '3' }).Count)",
-    "probe_representation_races=$($probeRaceRows.Count)",
-    "probe_prs1_wins=$probePrs1Wins",
-    "probe_v12_wins=$probeV12Wins",
-    "probe_v17_wins=$probeV17Wins",
-    "probe_candidate_summaries=$($probeSummaryRows.Count)",
-    "probe_plane_records=$($probePlaneRows.Count)",
-    "raw_cells=$(& $sum 'raw')",
-    "exact_ref_cells=$(& $sum 'exact_ref')",
-    "overlay_cells=$(& $sum 'overlay')",
-    "overlay_xor_cells=$(& $sum 'overlay_xor')",
-    "mixture_cells=$(& $sum 'mixture')",
-    "mixture_combinadic_cells=$(& $sum 'mixture_combinadic')",
-    "axial_cells=$(& $sum 'axial')",
-    "axial_xor_cells=$(& $sum 'axial_xor')",
-    "axial_even_odd_cells=$(& $sum 'axial_even_odd')",
-    "defect_cells=$(& $sum 'defect')",
-    "periodic_defect_cells=$(& $sum 'periodic_defect')",
-    "transition_cells=$(& $sum 'transition')",
-    "delta_transition_cells=$(& $sum 'delta_transition')",
-    '7zip_executed=False',
-    'winrar_executed=False',
-    'winzip_executed=False'
-) | Set-Content -LiteralPath $summaryPath -Encoding UTF8
+if (-not (Test-Path -LiteralPath $summaryPath -PathType Leaf)) {
+    throw 'PRS1_R5_SUMMARY.txt was not produced by analyzer.'
+}
+
+if (-not [string]::IsNullOrWhiteSpace($ExternalEvidenceRoot)) {
+    New-Item -ItemType Directory -Force -Path $ExternalEvidenceRoot | Out-Null
+    $externalFinal = Join-Path $ExternalEvidenceRoot $evidence.Name
+    if (Test-Path -LiteralPath $externalFinal) {
+        Remove-Item -LiteralPath $externalFinal -Recurse -Force
+    }
+    Copy-Item -LiteralPath $evidence.FullName -Destination $externalFinal -Recurse -Force
+    Write-Host "Final enriched external evidence: $externalFinal" -ForegroundColor Green
+}
 
 Write-Host "`n=== PRS1 R5 RESULT ===" -ForegroundColor Green
 Get-Content -LiteralPath $summaryPath | ForEach-Object { Write-Host $_ }
-Write-Host "Race-by-case summary: $(Join-Path $evidence.FullName 'prs1-races-by-case.csv')"
-Write-Host "Family-by-case summary: $(Join-Path $evidence.FullName 'prs1-families-by-case.csv')"
-Write-Host "Physical plane summary: $(Join-Path $evidence.FullName 'prs1-plane-summary.csv')"
 Write-Host "Evidence: $($evidence.FullName)"
 Write-Host "Trace: $tracePath"
 exit 0
