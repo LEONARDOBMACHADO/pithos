@@ -123,7 +123,10 @@ pub fn encode_exact_dedup(
             winner
         );
         match &substrate {
-            Ok((_, stats)) => trace_substrate_stats(input.len(), level, stats),
+            Ok((payload, stats)) => {
+                trace_substrate_stats(input.len(), level, stats);
+                trace_substrate_planes(input.len(), level, payload);
+            }
             Err(error) => eprintln!(
                 "PITHOS_REP_TRACE\tstage=prs1_candidate_error\tlevel={level}\tinput_bytes={}\terror={}",
                 input.len(),
@@ -255,6 +258,35 @@ fn trace_substrate_stats(input_bytes: usize, level: i32, stats: &SubstrateStats)
         stats.transition_cells,
         stats.delta_transition_cells
     );
+}
+
+fn trace_substrate_planes(input_bytes: usize, level: i32, payload: &[u8]) {
+    let table_bytes = match PRS1_PLANE_COUNT.checked_mul(PRS1_PLANE_RECORD_LEN) {
+        Some(value) => value,
+        None => return,
+    };
+    if payload.len() < PRS1_HEADER_LEN.saturating_add(table_bytes) || !payload.starts_with(b"PRS1") {
+        return;
+    }
+    for index in 0..PRS1_PLANE_COUNT {
+        let offset = PRS1_HEADER_LEN + index * PRS1_PLANE_RECORD_LEN;
+        let Some(record) = payload.get(offset..offset + PRS1_PLANE_RECORD_LEN) else {
+            return;
+        };
+        let plane_id = u16::from_le_bytes([record[0], record[1]]);
+        let codec_id = u16::from_le_bytes([record[2], record[3]]);
+        let raw_len = u64::from_le_bytes([
+            record[4], record[5], record[6], record[7], record[8], record[9], record[10],
+            record[11],
+        ]);
+        let encoded_len = u64::from_le_bytes([
+            record[12], record[13], record[14], record[15], record[16], record[17], record[18],
+            record[19],
+        ]);
+        eprintln!(
+            "PITHOS_REP_TRACE\tstage=prs1_plane\tlevel={level}\tinput_bytes={input_bytes}\tplane={plane_id}\tcodec_id={codec_id}\traw_bytes={raw_len}\tencoded_bytes={encoded_len}"
+        );
+    }
 }
 
 fn timed<T>(operation: impl FnOnce() -> T) -> (T, f64) {
