@@ -50,9 +50,11 @@ struct EncodedChoice {
     payload: Vec<u8>,
 }
 
+#[cfg(feature = "legacy-experiments")]
 pub fn pack(request: PackRequest) -> Result<()> {
     pack_with_control(request, &CancellationToken::new())
 }
+#[cfg(feature = "legacy-experiments")]
 pub fn pack_with_control(request: PackRequest, cancellation: &CancellationToken) -> Result<()> {
     pack_with_limits_and_control(request, &PackLimits::default(), cancellation)
 }
@@ -436,19 +438,17 @@ fn encode_standard_selection(
     selection: StandardSelection,
     race_secondary: bool,
 ) -> Result<EncodedChoice> {
-    if race_secondary {
-        if let Some(secondary) = selection.secondary {
-            let (primary_result, secondary_result) = std::thread::scope(|scope| {
-                let primary = scope.spawn(|| encode_standard_full(input, selection.primary));
-                let secondary = scope.spawn(|| encode_standard_full(input, secondary));
-                (primary.join(), secondary.join())
-            });
-            let primary = primary_result
-                .map_err(|_| PithosError::InvalidMetadata("primary standard worker panic"))??;
-            let secondary = secondary_result
-                .map_err(|_| PithosError::InvalidMetadata("secondary standard worker panic"))??;
-            return Ok(smaller_choice(primary, secondary));
-        }
+    if race_secondary && let Some(secondary) = selection.secondary {
+        let (primary_result, secondary_result) = std::thread::scope(|scope| {
+            let primary = scope.spawn(|| encode_standard_full(input, selection.primary));
+            let secondary = scope.spawn(|| encode_standard_full(input, secondary));
+            (primary.join(), secondary.join())
+        });
+        let primary = primary_result
+            .map_err(|_| PithosError::InvalidMetadata("primary standard worker panic"))??;
+        let secondary = secondary_result
+            .map_err(|_| PithosError::InvalidMetadata("secondary standard worker panic"))??;
+        return Ok(smaller_choice(primary, secondary));
     }
     encode_standard_full(input, selection.primary)
 }

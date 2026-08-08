@@ -5,6 +5,14 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[features]
+default = []
+# Historical pack/verify implementations are preserved for research and
+# regression archaeology, but are not part of the active production dispatch.
+# Keeping them behind an explicit feature avoids masking dead-code debt in the
+# active engine while retaining the source for future experiments.
+legacy-experiments = []
+
 [dependencies]
 pithos-engine-legacy = { package = "pithos-engine", path = "../pithos-engine" }
 pithos-core = { path = "../pithos-core" }

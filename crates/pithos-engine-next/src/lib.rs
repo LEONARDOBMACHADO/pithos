@@ -6,14 +6,18 @@
 
 pub use pithos_engine_legacy::*;
 
+#[cfg(feature = "legacy-experiments")]
 mod adaptive_pack;
 mod affinity_plan;
 mod archive_affinity;
 mod compat_dispatch;
 mod dedup_probe;
+#[cfg(feature = "legacy-experiments")]
 mod direct_pack;
 mod native_archive;
+#[cfg(feature = "legacy-experiments")]
 mod native_pack;
+#[cfg(feature = "legacy-experiments")]
 mod native_verify;
 mod parallel_archive;
 mod prescreen_pack;

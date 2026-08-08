@@ -1,8 +1,10 @@
 use pithos_codecs::{BrotliCodec, Codec, CodecId, Lzma2Codec, StoreCodec, ZstdCodec};
 use pithos_core::{DecodeLimits, PithosError, Result};
+use pithos_engine_legacy::{CancellationToken, VerificationReport};
+
+#[cfg(feature = "legacy-experiments")]
 use pithos_engine_legacy::{
-    ArchiveEntryKind, ArchiveEntrySummary, ArchiveInspection, CancellationToken, UnpackRequest,
-    VerificationReport,
+    ArchiveEntryKind, ArchiveEntrySummary, ArchiveInspection, UnpackRequest,
 };
 use pithos_format::{
     CentralIndexRecord, EntryKind, EntryRecord, FOOTER_LEN, Footer, GlobalHeader, GroupTableRecord,
@@ -11,8 +13,15 @@ use pithos_format::{
 };
 use pithos_native_codec::{NATIVE_CODEC_ID, NATIVE_CODEC_VERSION, decode_exact_dedup};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs::{self, File, OpenOptions};
-use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
+use std::fs::{self, File};
+
+#[cfg(feature = "legacy-experiments")]
+use std::fs::OpenOptions;
+
+use std::io::{ErrorKind, Read, Seek, SeekFrom};
+
+#[cfg(feature = "legacy-experiments")]
+use std::io::Write;
 use std::path::Path;
 
 const IO_BUFFER_SIZE: usize = 64 * 1024;
@@ -34,12 +43,11 @@ pub(crate) struct ArchiveCatalog {
     pub entries: Vec<EntryRecord>,
     pub groups: Vec<GroupTableRecord>,
     pub restore_map: Vec<RestoreMapRecord>,
-    pub central_index: Vec<CentralIndexRecord>,
-    pub integrity: Vec<IntegrityRecord>,
     pub registry: BTreeMap<u32, RegistryEntry>,
     pub footer_offset: u64,
 }
 
+#[cfg(feature = "legacy-experiments")]
 pub fn verify(archive: &Path) -> Result<VerificationReport> {
     verify_with_limits(archive, &DecodeLimits::default())
 }
@@ -59,11 +67,13 @@ pub fn verify_with_control(
     Ok(report(&catalog, fs::metadata(archive)?.len()))
 }
 
+#[cfg(feature = "legacy-experiments")]
 pub fn list(archive: &Path) -> Result<Vec<ArchiveEntrySummary>> {
     let catalog = read_catalog(archive, &DecodeLimits::default(), &CancellationToken::new())?;
     catalog.entries.iter().map(entry_summary).collect()
 }
 
+#[cfg(feature = "legacy-experiments")]
 pub fn inspect(archive: &Path) -> Result<ArchiveInspection> {
     let catalog = read_catalog(archive, &DecodeLimits::default(), &CancellationToken::new())?;
     let report = report(&catalog, fs::metadata(archive)?.len());
@@ -81,10 +91,12 @@ pub fn inspect(archive: &Path) -> Result<ArchiveInspection> {
     })
 }
 
+#[cfg(feature = "legacy-experiments")]
 pub fn unpack(request: UnpackRequest) -> Result<()> {
     unpack_with_control(request, &DecodeLimits::default(), &CancellationToken::new())
 }
 
+#[cfg(feature = "legacy-experiments")]
 pub fn unpack_with_control(
     request: UnpackRequest,
     limits: &DecodeLimits,
@@ -93,6 +105,7 @@ pub fn unpack_with_control(
     unpack_with_control_and_temp_limit(request, limits, limits.max_original_bytes, cancellation)
 }
 
+#[cfg(feature = "legacy-experiments")]
 pub fn unpack_with_control_and_temp_limit(
     request: UnpackRequest,
     limits: &DecodeLimits,
@@ -433,8 +446,6 @@ pub(crate) fn read_catalog(
         entries,
         groups,
         restore_map,
-        central_index,
-        integrity,
         registry,
         footer_offset: footer.archive_length - FOOTER_LEN as u64,
     })
@@ -577,6 +588,7 @@ fn archive_root_placeholder(catalog: &ArchiveCatalog) -> [u8; 32] {
     *hasher.finalize().as_bytes()
 }
 
+#[cfg(feature = "legacy-experiments")]
 fn entry_summary(entry: &EntryRecord) -> Result<ArchiveEntrySummary> {
     let kind = match entry.kind {
         EntryKind::File { .. } => ArchiveEntryKind::File,
@@ -773,6 +785,7 @@ fn checkpoint(cancellation: &CancellationToken) -> Result<()> {
     }
 }
 
+#[cfg(feature = "legacy-experiments")]
 fn path_entry_exists(path: &Path) -> Result<bool> {
     match fs::symlink_metadata(path) {
         Ok(_) => Ok(true),
@@ -781,14 +794,14 @@ fn path_entry_exists(path: &Path) -> Result<bool> {
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(feature = "legacy-experiments", unix))]
 fn apply_file_mode(path: &Path, mode: u32) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(path, fs::Permissions::from_mode(mode))?;
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(all(feature = "legacy-experiments", not(unix)))]
 fn apply_file_mode(path: &Path, mode: u32) -> Result<()> {
     let mut permissions = fs::metadata(path)?.permissions();
     permissions.set_readonly(mode & 0o200 == 0);
@@ -796,13 +809,13 @@ fn apply_file_mode(path: &Path, mode: u32) -> Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(all(feature = "legacy-experiments", unix))]
 fn create_symlink(target: &Path, destination: &Path, _target_is_dir: bool) -> Result<()> {
     std::os::unix::fs::symlink(target, destination)?;
     Ok(())
 }
 
-#[cfg(windows)]
+#[cfg(all(feature = "legacy-experiments", windows))]
 fn create_symlink(target: &Path, destination: &Path, target_is_dir: bool) -> Result<()> {
     if target_is_dir {
         std::os::windows::fs::symlink_dir(target, destination)?;
@@ -812,7 +825,7 @@ fn create_symlink(target: &Path, destination: &Path, target_is_dir: bool) -> Res
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(all(feature = "legacy-experiments", unix))]
 fn sync_parent(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         File::open(parent)?.sync_all()?;
@@ -820,7 +833,7 @@ fn sync_parent(path: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(all(feature = "legacy-experiments", not(unix)))]
 fn sync_parent(_path: &Path) -> Result<()> {
     Ok(())
 }
