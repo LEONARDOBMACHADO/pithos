@@ -1,4 +1,5 @@
 use crate::archive_affinity;
+use crate::dedup_probe;
 use crate::native_archive::{self, RegistryEntry, encode_registry, read_catalog};
 use pithos_codecs::{BrotliCodec, Codec, CodecConfig, CodecId, Lzma2Codec, StoreCodec, ZstdCodec};
 use pithos_core::{CompressionProfile, DecodeLimits, PithosError, Result};
@@ -23,6 +24,7 @@ const NATIVE_CHAIN_ID: u32 = 5;
 const MIN_NATIVE_GROUP_BYTES: usize = 1024 * 1024;
 const IO_BUFFER_SIZE: usize = 64 * 1024;
 const ARCHIVE_MAX_FINALIST_PERCENT: usize = 101;
+const MATERIAL_EXACT_DUPLICATE_PERCENT: u64 = 5;
 
 #[derive(Debug)]
 struct SourceData {
@@ -387,10 +389,21 @@ fn choose_with_prescreen(
             .0
             .len()
     };
+    let material_exact_duplicates = if profile == CompressionProfile::ArchiveMax {
+        let opportunity = dedup_probe::estimate(input, member_lengths)?;
+        opportunity
+            .gross_duplicate_bytes
+            .saturating_mul(100)
+            >= (input.len() as u64).saturating_mul(MATERIAL_EXACT_DUPLICATE_PERCENT)
+    } else {
+        false
+    };
     if native_probe_bytes.saturating_mul(100) <= standard_probe_bytes.saturating_mul(95) {
         return encode_native_full(input, member_lengths, profile);
     }
-    if standard_probe_bytes.saturating_mul(100) <= native_probe_bytes.saturating_mul(88) {
+    if !material_exact_duplicates
+        && standard_probe_bytes.saturating_mul(100) <= native_probe_bytes.saturating_mul(88)
+    {
         return encode_standard_selection(input, standard_selection, allow_parallel);
     }
 
