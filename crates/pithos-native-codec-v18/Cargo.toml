@@ -9,3 +9,4 @@ license.workspace = true
 pithos-core = { path = "../pithos-core" }
 pithos-native-current = { package = "pithos-native-codec-v17", path = "../pithos-native-codec-v17" }
 pithos-native-floor = { package = "pithos-native-codec-v12", path = "../pithos-native-codec-v12" }
+pithos-representation-substrate = { path = "../pithos-representation-substrate" }

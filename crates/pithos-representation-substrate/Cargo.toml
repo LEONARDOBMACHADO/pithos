@@ -1,0 +1,12 @@
+[package]
+name = "pithos-representation-substrate"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+pithos-core = { path = "../pithos-core" }
+pithos-codecs = { path = "../pithos-codecs" }
+blake3.workspace = true
+crc32c.workspace = true
