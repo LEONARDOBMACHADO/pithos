@@ -10,6 +10,13 @@ Set-StrictMode -Version Latest
 
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Set-Location $repo
+
+$nativeHelper = Join-Path $PSScriptRoot 'native-process.ps1'
+if (-not (Test-Path -LiteralPath $nativeHelper -PathType Leaf)) {
+    throw "Native process helper not found: $nativeHelper"
+}
+. $nativeHelper
+
 $corpusPath = if ([System.IO.Path]::IsPathRooted($Corpus)) { $Corpus } else { Join-Path $repo $Corpus }
 if (-not (Test-Path -LiteralPath $corpusPath -PathType Container)) { throw "Corpus directory not found: $corpusPath" }
 
@@ -43,21 +50,48 @@ $corpusFiles = @(Get-ChildItem -LiteralPath $corpusPath -File -Recurse |
 if ($corpusFiles.Count -eq 0) { throw 'Frozen corpus is empty.' }
 
 Write-Host '=== Corpus inventory ===' -ForegroundColor Cyan
-& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'inventory-tst-compact.ps1') -Corpus $corpusPath
-if ($LASTEXITCODE -ne 0) { throw "inventory failed with exit code $LASTEXITCODE" }
+$inventoryExit = Invoke-PithosNativeProcess `
+    -FilePath 'powershell' `
+    -Arguments @(
+        '-NoProfile',
+        '-ExecutionPolicy','Bypass',
+        '-File',(Join-Path $PSScriptRoot 'inventory-tst-compact.ps1'),
+        '-Corpus',$corpusPath
+    )
+if ($inventoryExit -ne 0) { throw "inventory failed with exit code $inventoryExit" }
 
 Write-Host "`n=== Phase analysis benchmark (Pithos internal) ===" -ForegroundColor Cyan
-& cargo run --release -p pithos-bench --bin pithos-phasebench -- --corpus $corpusPath --results $resultsPath --max-total-mib $PhaseMaxTotalMiB
-if ($LASTEXITCODE -ne 0) { throw "phasebench failed with exit code $LASTEXITCODE" }
+$phaseExit = Invoke-PithosNativeProcess `
+    -FilePath 'cargo' `
+    -Arguments @(
+        'run','--release','-p','pithos-bench','--bin','pithos-phasebench','--',
+        '--corpus',$corpusPath,
+        '--results',$resultsPath,
+        '--max-total-mib',[string]$PhaseMaxTotalMiB
+    )
+if ($phaseExit -ne 0) { throw "phasebench failed with exit code $phaseExit" }
 
 Write-Host "`n=== Codec contribution benchmark (Pithos internal) ===" -ForegroundColor Cyan
-& cargo run --release -p pithos-bench --bin pithos-codecbench -- --corpus $corpusPath --results $resultsPath
-if ($LASTEXITCODE -ne 0) { throw "codecbench failed with exit code $LASTEXITCODE" }
+$codecExit = Invoke-PithosNativeProcess `
+    -FilePath 'cargo' `
+    -Arguments @(
+        'run','--release','-p','pithos-bench','--bin','pithos-codecbench','--',
+        '--corpus',$corpusPath,
+        '--results',$resultsPath
+    )
+if ($codecExit -ne 0) { throw "codecbench failed with exit code $codecExit" }
 
 Write-Host "`n=== Compression benchmark: PITHOS ONLY ===" -ForegroundColor Cyan
 Write-Host '7-Zip is NOT executed. Comparison uses docs/benchmarks/7zip-best-baseline.csv.' -ForegroundColor Yellow
-& cargo run --release -p pithos-bench --bin pithos-bench -- --corpus $corpusPath --results $resultsPath --pithos-only
-if ($LASTEXITCODE -ne 0) { throw "pithos-only benchmark failed with exit code $LASTEXITCODE" }
+$benchmarkExit = Invoke-PithosNativeProcess `
+    -FilePath 'cargo' `
+    -Arguments @(
+        'run','--release','-p','pithos-bench','--bin','pithos-bench','--',
+        '--corpus',$corpusPath,
+        '--results',$resultsPath,
+        '--pithos-only'
+    )
+if ($benchmarkExit -ne 0) { throw "pithos-only benchmark failed with exit code $benchmarkExit" }
 
 $benchmarkPath = Join-Path $resultsPath 'benchmark.csv'
 if (-not (Test-Path -LiteralPath $benchmarkPath -PathType Leaf)) { throw 'benchmark.csv not produced.' }
@@ -128,6 +162,7 @@ $summaryPath = Join-Path $resultsPath 'frozen-baseline-summary.txt'
     "timestamp_utc=$((Get-Date).ToUniversalTime().ToString('o'))",
     "branch=$branch",
     "commit=$sha",
+    'native_process_failure_policy=EXIT_CODE_ONLY',
     "cases=$($comparison.Count)",
     "successful_cases=$($ok.Count)",
     "size_wins_vs_7zip_best=$sizeWins",
