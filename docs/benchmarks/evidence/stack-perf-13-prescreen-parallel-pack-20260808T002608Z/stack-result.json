@@ -1,0 +1,30 @@
+﻿[
+    {
+        "branch":  "perf/13-prescreen-parallel-pack",
+        "commit":  "96a544ddd7c667c19558e698aaa6280163cad3cc",
+        "compressor":  "pithos",
+        "profile":  "archive-max",
+        "original_bytes":  499318122,
+        "archive_bytes":  89024107,
+        "savings_percent":  82.170864,
+        "compress_ms":  102308.246,
+        "verify_ms":  987.108,
+        "decompress_ms":  1812.738,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    },
+    {
+        "branch":  "perf/13-prescreen-parallel-pack",
+        "commit":  "96a544ddd7c667c19558e698aaa6280163cad3cc",
+        "compressor":  "7zip",
+        "profile":  "lzma2-mx9-solid",
+        "original_bytes":  499318122,
+        "archive_bytes":  86352018,
+        "savings_percent":  82.706012,
+        "compress_ms":  64288.048,
+        "verify_ms":  3126.237,
+        "decompress_ms":  3457.883,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    }
+]

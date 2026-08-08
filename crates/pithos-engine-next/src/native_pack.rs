@@ -10,9 +10,7 @@ use pithos_format::{
     REQUIRED_COMPRESSED_SECTIONS, SECTION_ENTRY_LEN, SectionDirectoryRecord, SectionType,
 };
 use pithos_io::{atomic_commit, create_atomic_spool};
-use pithos_native_codec::{
-    NATIVE_CODEC_ID, NATIVE_CODEC_VERSION, NativeStats, encode_exact_dedup,
-};
+use pithos_native_codec::{NATIVE_CODEC_ID, NATIVE_CODEC_VERSION, NativeStats, encode_exact_dedup};
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File};
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
@@ -246,9 +244,21 @@ fn write_repacked_archive(
     }
 
     let mut sections = Vec::with_capacity(REQUIRED_COMPRESSED_SECTIONS as usize);
-    sections.push(write_section(&mut spool, SectionType::CodecRegistry, &registry_bytes)?);
-    sections.push(write_section(&mut spool, SectionType::EntryTable, &entry_bytes)?);
-    sections.push(write_section(&mut spool, SectionType::GroupTable, &group_bytes)?);
+    sections.push(write_section(
+        &mut spool,
+        SectionType::CodecRegistry,
+        &registry_bytes,
+    )?);
+    sections.push(write_section(
+        &mut spool,
+        SectionType::EntryTable,
+        &entry_bytes,
+    )?);
+    sections.push(write_section(
+        &mut spool,
+        SectionType::GroupTable,
+        &group_bytes,
+    )?);
     sections.push(SectionDirectoryRecord {
         section_type: SectionType::PayloadArea as u16,
         section_version: 1,
@@ -258,9 +268,21 @@ fn write_repacked_archive(
         crc32c: payload_crc,
         reserved: 0,
     });
-    sections.push(write_section(&mut spool, SectionType::RestoreMap, &restore_bytes)?);
-    sections.push(write_section(&mut spool, SectionType::CentralIndex, &index_bytes)?);
-    sections.push(write_section(&mut spool, SectionType::IntegrityTree, &integrity_bytes)?);
+    sections.push(write_section(
+        &mut spool,
+        SectionType::RestoreMap,
+        &restore_bytes,
+    )?);
+    sections.push(write_section(
+        &mut spool,
+        SectionType::CentralIndex,
+        &index_bytes,
+    )?);
+    sections.push(write_section(
+        &mut spool,
+        SectionType::IntegrityTree,
+        &integrity_bytes,
+    )?);
     sections.sort_by_key(|section| section.section_type);
 
     let footer_offset = spool.stream_position()?;
