@@ -22,6 +22,7 @@ const MAX_NATIVE_SAMPLE_BYTES: usize = 3 * 1024 * 1024;
 const NATIVE_CHAIN_ID: u32 = 5;
 const MIN_NATIVE_GROUP_BYTES: usize = 1024 * 1024;
 const IO_BUFFER_SIZE: usize = 64 * 1024;
+const ARCHIVE_MAX_FINALIST_PERCENT: usize = 101;
 
 #[derive(Debug)]
 struct SourceData {
@@ -32,6 +33,12 @@ struct SourceData {
 struct Candidate {
     codec: CodecId,
     level: i32,
+}
+#[derive(Debug, Clone, Copy)]
+struct StandardSelection {
+    primary: Candidate,
+    primary_probe_bytes: usize,
+    secondary: Option<Candidate>,
 }
 #[derive(Debug)]
 struct EncodedChoice {
@@ -363,13 +370,14 @@ fn choose_with_prescreen(
     allow_parallel: bool,
 ) -> Result<EncodedChoice> {
     if input.len() < MIN_NATIVE_GROUP_BYTES {
-        let (candidate, _) =
-            select_standard_candidate(&deterministic_sample(input), profile, cancellation)?;
-        return encode_standard_full(input, candidate);
+        let selection =
+            select_standard_selection(&deterministic_sample(input), profile, cancellation)?;
+        return encode_standard_selection(input, selection, false);
     }
     let standard_sample = deterministic_sample(input);
-    let (standard_candidate, standard_probe_bytes) =
-        select_standard_candidate(&standard_sample, profile, cancellation)?;
+    let standard_selection =
+        select_standard_selection(&standard_sample, profile, cancellation)?;
+    let standard_probe_bytes = standard_selection.primary_probe_bytes;
     let (native_sample, native_sample_lengths) =
         deterministic_member_sample(input, member_lengths)?;
     let native_probe_bytes = if native_sample.is_empty() {
@@ -383,12 +391,13 @@ fn choose_with_prescreen(
         return encode_native_full(input, member_lengths, profile);
     }
     if standard_probe_bytes.saturating_mul(100) <= native_probe_bytes.saturating_mul(88) {
-        return encode_standard_full(input, standard_candidate);
+        return encode_standard_selection(input, standard_selection, allow_parallel);
     }
 
     if allow_parallel {
         let (standard_result, native_result) = std::thread::scope(|scope| {
-            let standard_handle = scope.spawn(|| encode_standard_full(input, standard_candidate));
+            let standard_handle =
+                scope.spawn(|| encode_standard_selection(input, standard_selection, false));
             let native_handle = scope.spawn(|| encode_native_full(input, member_lengths, profile));
             (standard_handle.join(), native_handle.join())
         });
@@ -399,10 +408,32 @@ fn choose_with_prescreen(
             .map_err(|_| PithosError::InvalidMetadata("native candidate worker panic"))??;
         return Ok(smaller_choice(standard, native));
     }
-    let standard = encode_standard_full(input, standard_candidate)?;
+    let standard = encode_standard_selection(input, standard_selection, false)?;
     checkpoint(cancellation)?;
     let native = encode_native_full(input, member_lengths, profile)?;
     Ok(smaller_choice(standard, native))
+}
+
+fn encode_standard_selection(
+    input: &[u8],
+    selection: StandardSelection,
+    race_secondary: bool,
+) -> Result<EncodedChoice> {
+    if race_secondary {
+        if let Some(secondary) = selection.secondary {
+            let (primary_result, secondary_result) = std::thread::scope(|scope| {
+                let primary = scope.spawn(|| encode_standard_full(input, selection.primary));
+                let secondary = scope.spawn(|| encode_standard_full(input, secondary));
+                (primary.join(), secondary.join())
+            });
+            let primary = primary_result
+                .map_err(|_| PithosError::InvalidMetadata("primary standard worker panic"))??;
+            let secondary = secondary_result
+                .map_err(|_| PithosError::InvalidMetadata("secondary standard worker panic"))??;
+            return Ok(smaller_choice(primary, secondary));
+        }
+    }
+    encode_standard_full(input, selection.primary)
 }
 
 fn smaller_choice(left: EncodedChoice, right: EncodedChoice) -> EncodedChoice {
@@ -427,11 +458,11 @@ fn encode_native_full(
         payload,
     })
 }
-fn select_standard_candidate(
+fn select_standard_selection(
     sample: &[u8],
     profile: CompressionProfile,
     cancellation: &CancellationToken,
-) -> Result<(Candidate, usize)> {
+) -> Result<StandardSelection> {
     let candidates = profile_candidates(profile);
     let mut probes = Vec::with_capacity(candidates.len());
     for candidate in &candidates {
@@ -448,30 +479,49 @@ fn select_standard_candidate(
     }
     probes.sort_by_key(|(candidate, bytes)| (*bytes, speed_rank(candidate.codec)));
 
-    let (mut selected, mut selected_bytes) = if profile == CompressionProfile::ArchiveMax {
-        probes[0]
-    } else {
-        let best_bytes = probes[0].1;
-        let tolerance = match profile {
-            CompressionProfile::Balanced => 1.01,
-            _ => 1.02,
+    let (mut selected, mut selected_bytes, mut secondary) =
+        if profile == CompressionProfile::ArchiveMax {
+            let (primary, primary_bytes) = probes[0];
+            let secondary = probes.get(1).and_then(|(candidate, bytes)| {
+                if primary.codec != CodecId::Store
+                    && candidate.codec != CodecId::Store
+                    && bytes.saturating_mul(100)
+                        <= primary_bytes.saturating_mul(ARCHIVE_MAX_FINALIST_PERCENT)
+                {
+                    Some(*candidate)
+                } else {
+                    None
+                }
+            });
+            (primary, primary_bytes, secondary)
+        } else {
+            let best_bytes = probes[0].1;
+            let tolerance = match profile {
+                CompressionProfile::Balanced => 1.01,
+                _ => 1.02,
+            };
+            let mut eligible = probes
+                .iter()
+                .filter(|(_, bytes)| (*bytes as f64) <= best_bytes as f64 * tolerance)
+                .map(|(candidate, bytes)| (*candidate, *bytes))
+                .collect::<Vec<_>>();
+            eligible.sort_by_key(|(candidate, _)| speed_rank(candidate.codec));
+            let (selected, selected_bytes) = eligible[0];
+            (selected, selected_bytes, None)
         };
-        let mut eligible = probes
-            .iter()
-            .filter(|(_, bytes)| (*bytes as f64) <= best_bytes as f64 * tolerance)
-            .map(|(candidate, bytes)| (*candidate, *bytes))
-            .collect::<Vec<_>>();
-        eligible.sort_by_key(|(candidate, _)| speed_rank(candidate.codec));
-        eligible[0]
-    };
     if selected.codec != CodecId::Store && selected_bytes >= sample.len() {
         selected = Candidate {
             codec: CodecId::Store,
             level: 0,
         };
         selected_bytes = sample.len();
+        secondary = None;
     }
-    Ok((selected, selected_bytes))
+    Ok(StandardSelection {
+        primary: selected,
+        primary_probe_bytes: selected_bytes,
+        secondary,
+    })
 }
 fn encode_standard_full(input: &[u8], candidate: Candidate) -> Result<EncodedChoice> {
     let mut payload = Vec::new();
