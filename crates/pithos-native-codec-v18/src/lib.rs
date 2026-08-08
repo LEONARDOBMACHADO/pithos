@@ -6,6 +6,7 @@
 //! The decoder delegates to v17, whose compatibility chain reaches v12.
 
 use pithos_core::Result;
+use std::time::Instant;
 
 pub const NATIVE_CODEC_ID: u16 = 4;
 pub const NATIVE_CODEC_VERSION: u16 = 18;
@@ -25,19 +26,45 @@ pub fn encode_exact_dedup(
     level: i32,
 ) -> Result<(Vec<u8>, NativeStats)> {
     let (current_result, floor_result) = std::thread::scope(|scope| {
-        let current =
-            scope.spawn(|| pithos_native_current::encode_exact_dedup(input, member_lengths, level));
-        let floor =
-            scope.spawn(|| pithos_native_floor::encode_exact_dedup(input, member_lengths, level));
+        let current = scope.spawn(|| {
+            let started = Instant::now();
+            let result =
+                pithos_native_current::encode_exact_dedup(input, member_lengths, level);
+            (result, started.elapsed().as_secs_f64() * 1000.0)
+        });
+        let floor = scope.spawn(|| {
+            let started = Instant::now();
+            let result = pithos_native_floor::encode_exact_dedup(input, member_lengths, level);
+            (result, started.elapsed().as_secs_f64() * 1000.0)
+        });
         (current.join(), floor.join())
     });
-    let current = current_result
-        .map_err(|_| pithos_core::PithosError::InvalidMetadata("native current worker panic"))??;
-    let floor = floor_result
-        .map_err(|_| pithos_core::PithosError::InvalidMetadata("native floor worker panic"))??;
 
-    if floor.0.len() < current.0.len() {
-        let len = floor.0.len() as u64;
+    let (current, current_ms) = current_result
+        .map_err(|_| pithos_core::PithosError::InvalidMetadata("native current worker panic"))?;
+    let current = current?;
+    let (floor, floor_ms) = floor_result
+        .map_err(|_| pithos_core::PithosError::InvalidMetadata("native floor worker panic"))?;
+    let floor = floor?;
+
+    let current_len = current.0.len() as u64;
+    let floor_len = floor.0.len() as u64;
+    let floor_wins = floor_len < current_len;
+
+    if representation_trace_enabled() {
+        eprintln!(
+            "PITHOS_REP_TRACE\tstage=native_floor_race\tinput_bytes={}\tmembers={}\tcurrent=v17\tcurrent_bytes={}\tcurrent_ms={:.3}\tfloor=v12\tfloor_bytes={}\tfloor_ms={:.3}\twinner={}",
+            input.len(),
+            member_lengths.len(),
+            current_len,
+            current_ms,
+            floor_len,
+            floor_ms,
+            if floor_wins { "v12" } else { "v17" }
+        );
+    }
+
+    if floor_wins {
         Ok((
             floor.0,
             NativeStats {
@@ -45,11 +72,10 @@ pub fn encode_exact_dedup(
                 canonical_chunks: floor.1.canonical_chunks,
                 gross_duplicate_bytes: floor.1.gross_duplicate_bytes,
                 representation_bytes: floor.1.representation_bytes,
-                encoded_bytes: len,
+                encoded_bytes: floor_len,
             },
         ))
     } else {
-        let len = current.0.len() as u64;
         Ok((
             current.0,
             NativeStats {
@@ -57,7 +83,7 @@ pub fn encode_exact_dedup(
                 canonical_chunks: current.1.canonical_chunks,
                 gross_duplicate_bytes: current.1.gross_duplicate_bytes,
                 representation_bytes: current.1.representation_bytes,
-                encoded_bytes: len,
+                encoded_bytes: current_len,
             },
         ))
     }
@@ -65,6 +91,12 @@ pub fn encode_exact_dedup(
 
 pub fn decode_exact_dedup(payload: &[u8], expected_len: u64) -> Result<Vec<u8>> {
     pithos_native_current::decode_exact_dedup(payload, expected_len)
+}
+
+fn representation_trace_enabled() -> bool {
+    std::env::var("PITHOS_REP_TRACE")
+        .ok()
+        .is_some_and(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
 }
 
 #[cfg(test)]
