@@ -36,10 +36,8 @@ pub fn encode_exact_dedup(
     if is_text_like(input) {
         let (sample, sample_lengths) = deterministic_member_sample(input, member_lengths)?;
         if sample.len() >= 4096 {
-            let (v3_probe, _) =
-                pithos_native_v3::encode_exact_dedup(&sample, &sample_lengths, 3)?;
-            let (v7_probe, _) =
-                pithos_native_v7::encode_exact_dedup(&sample, &sample_lengths, 3)?;
+            let (v3_probe, _) = pithos_native_v3::encode_exact_dedup(&sample, &sample_lengths, 3)?;
+            let (v7_probe, _) = pithos_native_v7::encode_exact_dedup(&sample, &sample_lengths, 3)?;
             if v7_probe.len().saturating_mul(100) <= v3_probe.len().saturating_mul(98) {
                 let (payload, stats) =
                     pithos_native_v7::encode_exact_dedup(input, member_lengths, level)?;
@@ -58,7 +56,9 @@ pub fn decode_exact_dedup(payload: &[u8], expected_len: u64) -> Result<Vec<u8>> 
 
 fn validate_members(input: &[u8], member_lengths: &[u64]) -> Result<()> {
     let total = member_lengths.iter().try_fold(0_u64, |total, length| {
-        total.checked_add(*length).ok_or(PithosError::IntegerOverflow)
+        total
+            .checked_add(*length)
+            .ok_or(PithosError::IntegerOverflow)
     })?;
     if total != input.len() as u64 {
         return Err(PithosError::InvalidMetadata("native member boundaries"));
@@ -124,7 +124,9 @@ fn deterministic_member_sample(
             break;
         }
         let length = usize::try_from(*length).map_err(|_| PithosError::IntegerOverflow)?;
-        let end = offset.checked_add(length).ok_or(PithosError::IntegerOverflow)?;
+        let end = offset
+            .checked_add(length)
+            .ok_or(PithosError::IntegerOverflow)?;
         let member = input.get(offset..end).ok_or(PithosError::InvalidRange)?;
         let remaining = MAX_SAMPLE_TOTAL - output.len();
         let wanted = member.len().min(SAMPLE_PER_MEMBER).min(remaining);
@@ -150,16 +152,40 @@ fn deterministic_member_sample(
 }
 
 fn from_v3(stats: pithos_native_v3::NativeStats) -> NativeStats {
-    NativeStats { chunk_count: stats.chunk_count, canonical_chunks: stats.canonical_chunks, gross_duplicate_bytes: stats.gross_duplicate_bytes, representation_bytes: stats.representation_bytes, encoded_bytes: stats.encoded_bytes }
+    NativeStats {
+        chunk_count: stats.chunk_count,
+        canonical_chunks: stats.canonical_chunks,
+        gross_duplicate_bytes: stats.gross_duplicate_bytes,
+        representation_bytes: stats.representation_bytes,
+        encoded_bytes: stats.encoded_bytes,
+    }
 }
 fn from_v5(stats: pithos_native_v5::NativeStats) -> NativeStats {
-    NativeStats { chunk_count: stats.chunk_count, canonical_chunks: stats.canonical_chunks, gross_duplicate_bytes: stats.gross_duplicate_bytes, representation_bytes: stats.representation_bytes, encoded_bytes: stats.encoded_bytes }
+    NativeStats {
+        chunk_count: stats.chunk_count,
+        canonical_chunks: stats.canonical_chunks,
+        gross_duplicate_bytes: stats.gross_duplicate_bytes,
+        representation_bytes: stats.representation_bytes,
+        encoded_bytes: stats.encoded_bytes,
+    }
 }
 fn from_v7(stats: pithos_native_v7::NativeStats) -> NativeStats {
-    NativeStats { chunk_count: stats.chunk_count, canonical_chunks: stats.canonical_chunks, gross_duplicate_bytes: stats.gross_duplicate_bytes, representation_bytes: stats.representation_bytes, encoded_bytes: stats.encoded_bytes }
+    NativeStats {
+        chunk_count: stats.chunk_count,
+        canonical_chunks: stats.canonical_chunks,
+        gross_duplicate_bytes: stats.gross_duplicate_bytes,
+        representation_bytes: stats.representation_bytes,
+        encoded_bytes: stats.encoded_bytes,
+    }
 }
 fn from_v8(stats: pithos_native_v8::NativeStats) -> NativeStats {
-    NativeStats { chunk_count: stats.chunk_count, canonical_chunks: stats.canonical_chunks, gross_duplicate_bytes: stats.gross_duplicate_bytes, representation_bytes: stats.representation_bytes, encoded_bytes: stats.encoded_bytes }
+    NativeStats {
+        chunk_count: stats.chunk_count,
+        canonical_chunks: stats.canonical_chunks,
+        gross_duplicate_bytes: stats.gross_duplicate_bytes,
+        representation_bytes: stats.representation_bytes,
+        encoded_bytes: stats.encoded_bytes,
+    }
 }
 
 #[cfg(test)]
@@ -171,6 +197,9 @@ mod tests {
             .map(|index| ((index * 193 + index / 7) % 256) as u8)
             .collect::<Vec<_>>();
         let (encoded, _) = encode_exact_dedup(&input, &[input.len() as u64], 5).unwrap();
-        assert_eq!(decode_exact_dedup(&encoded, input.len() as u64).unwrap(), input);
+        assert_eq!(
+            decode_exact_dedup(&encoded, input.len() as u64).unwrap(),
+            input
+        );
     }
 }
