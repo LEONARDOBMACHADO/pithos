@@ -53,8 +53,9 @@ pub fn pack_with_limits_and_control(
     let class_path = candidates.path().join("class-aware.pits");
     let global_path = candidates.path().join("global.pits");
 
+    trace_archive_scope("begin", "class-aware");
     let class_started = Instant::now();
-    affinity_plan::with_mode(affinity_plan::PlannerMode::ClassAware, || {
+    let class_result = affinity_plan::with_mode(affinity_plan::PlannerMode::ClassAware, || {
         prescreen_pack::pack_with_limits_and_control(
             PackRequest {
                 inputs: inputs.clone(),
@@ -64,12 +65,15 @@ pub fn pack_with_limits_and_control(
             limits,
             cancellation,
         )
-    })?;
+    });
     let class_ms = class_started.elapsed().as_secs_f64() * 1000.0;
+    trace_archive_scope("end", "class-aware");
+    class_result?;
     checkpoint(cancellation)?;
 
+    trace_archive_scope("begin", "global");
     let global_started = Instant::now();
-    affinity_plan::with_mode(affinity_plan::PlannerMode::Global, || {
+    let global_result = affinity_plan::with_mode(affinity_plan::PlannerMode::Global, || {
         prescreen_pack::pack_with_limits_and_control(
             PackRequest {
                 inputs,
@@ -79,8 +83,10 @@ pub fn pack_with_limits_and_control(
             limits,
             cancellation,
         )
-    })?;
+    });
     let global_ms = global_started.elapsed().as_secs_f64() * 1000.0;
+    trace_archive_scope("end", "global");
+    global_result?;
     checkpoint(cancellation)?;
 
     let class_bytes = fs::metadata(&class_path)?.len();
@@ -108,6 +114,14 @@ pub fn pack_with_limits_and_control(
     fs::rename(winner, &output)?;
     sync_parent(&output)?;
     Ok(())
+}
+
+fn trace_archive_scope(phase: &str, candidate: &str) {
+    if representation_trace_enabled() {
+        eprintln!(
+            "PITHOS_REP_TRACE\tstage=archive_scope\tphase={phase}\tcandidate={candidate}"
+        );
+    }
 }
 
 fn representation_trace_enabled() -> bool {
