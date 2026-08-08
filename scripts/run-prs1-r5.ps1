@@ -10,6 +10,13 @@ Set-StrictMode -Version Latest
 
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Set-Location $repo
+
+$nativeHelper = Join-Path $PSScriptRoot 'native-process.ps1'
+if (-not (Test-Path -LiteralPath $nativeHelper -PathType Leaf)) {
+    throw "Native process helper not found: $nativeHelper"
+}
+. $nativeHelper
+
 $branch = (& git branch --show-current).Trim()
 $sha = (& git rev-parse HEAD).Trim()
 if ($branch -ne 'feat/31-representation-substrate') {
@@ -52,8 +59,12 @@ $lockHasSubstrate = Select-String -LiteralPath (Join-Path $repo 'Cargo.lock') `
     -SimpleMatch 'name = "pithos-representation-substrate"' -Quiet
 if (-not $lockHasSubstrate) {
     Write-Host '=== PRS1 R5 LOCKFILE PREPARATION ===' -ForegroundColor Yellow
-    & cargo generate-lockfile
-    if ($LASTEXITCODE -ne 0) { throw 'cargo generate-lockfile failed' }
+    $generateLockExit = Invoke-PithosNativeProcess `
+        -FilePath 'cargo' `
+        -Arguments @('generate-lockfile')
+    if ($generateLockExit -ne 0) {
+        throw "cargo generate-lockfile failed with exit code $generateLockExit"
+    }
 
     $unexpectedAfterLock = @(Get-UnexpectedStatus -AllowCargoLock)
     if ($unexpectedAfterLock.Count -gt 0) {
@@ -78,9 +89,12 @@ if (-not $lockHasSubstrate) {
 # From this point onward the dependency graph must already be committed and
 # reproducible. --locked prevents Cargo from silently repairing it during gates.
 Write-Host '=== PRS1 R5 LOCKFILE REPRODUCIBILITY ===' -ForegroundColor Cyan
-& cargo metadata --locked --format-version 1 --no-deps | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    throw 'cargo metadata --locked failed; Cargo.lock is stale or inconsistent.'
+$metadataExit = Invoke-PithosNativeProcess `
+    -FilePath 'cargo' `
+    -Arguments @('metadata','--locked','--format-version','1','--no-deps') `
+    -DiscardOutput
+if ($metadataExit -ne 0) {
+    throw "cargo metadata --locked failed with exit code $metadataExit; Cargo.lock is stale or inconsistent."
 }
 
 $gateRoot = if ([string]::IsNullOrWhiteSpace($ExternalEvidenceRoot)) {
@@ -94,19 +108,23 @@ $clippyMapLog = Join-Path $gateRoot "prs1-r5-clippy-map-$gateTimestamp.log"
 $strictLog = Join-Path $gateRoot "prs1-r5-clippy-strict-$gateTimestamp.log"
 
 Write-Host "`n=== PRS1 R5 STATIC GATE 1/5: RUSTFMT ===" -ForegroundColor Cyan
-& cargo fmt --all -- --check
-if ($LASTEXITCODE -ne 0) {
-    throw 'cargo fmt --all -- --check failed. Run cargo fmt --all in a dedicated source-fix commit; do not benchmark.'
+$fmtExit = Invoke-PithosNativeProcess `
+    -FilePath 'cargo' `
+    -Arguments @('fmt','--all','--','--check')
+if ($fmtExit -ne 0) {
+    throw "cargo fmt --all -- --check failed with exit code $fmtExit. Run cargo fmt --all in a dedicated source-fix commit; do not benchmark."
 }
 
 # Run a complete non-strict workspace Clippy FIRST. This deliberately discovers
 # the full warning surface in one pass so R5 cannot repeat the R4 cycle of fixing
 # one compiler blocker only to reveal the next warning on the following run.
 Write-Host "`n=== PRS1 R5 STATIC GATE 2/5: COMPLETE CLIPPY WARNING MAP ===" -ForegroundColor Cyan
-& cargo clippy --workspace --all-targets 2>&1 | Tee-Object -FilePath $clippyMapLog
-$clippyMapExit = $LASTEXITCODE
+$clippyMapExit = Invoke-PithosNativeProcess `
+    -FilePath 'cargo' `
+    -Arguments @('clippy','--workspace','--all-targets') `
+    -LogPath $clippyMapLog
 if ($clippyMapExit -ne 0) {
-    Stop-WithLog 'Workspace Clippy map failed to compile. STOP before tests/benchmark.' $clippyMapLog
+    Stop-WithLog "Workspace Clippy map failed to compile with exit code $clippyMapExit. STOP before tests/benchmark." $clippyMapLog
 }
 
 $warningLines = @(Select-String -LiteralPath $clippyMapLog -Pattern '(^|\s)warning:' -CaseSensitive:$false)
@@ -118,32 +136,43 @@ if ($warningLines.Count -gt 0) {
 Write-Host 'COMPLETE CLIPPY WARNING MAP: 0 warnings' -ForegroundColor Green
 
 Write-Host "`n=== PRS1 R5 STATIC GATE 3/5: STRICT CLIPPY ===" -ForegroundColor Cyan
-& cargo clippy --workspace --all-targets -- -D warnings 2>&1 | Tee-Object -FilePath $strictLog
-if ($LASTEXITCODE -ne 0) {
-    Stop-WithLog 'Workspace strict Clippy failed. STOP before tests/benchmark.' $strictLog
+$strictExit = Invoke-PithosNativeProcess `
+    -FilePath 'cargo' `
+    -Arguments @('clippy','--workspace','--all-targets','--','-D','warnings') `
+    -LogPath $strictLog
+if ($strictExit -ne 0) {
+    Stop-WithLog "Workspace strict Clippy failed with exit code $strictExit. STOP before tests/benchmark." $strictLog
 }
 Write-Host 'STRICT CLIPPY PASS' -ForegroundColor Green
 
 Write-Host "`n=== PRS1 R5 STATIC GATE 4/5: TARGETED ROUNDTRIP TESTS ===" -ForegroundColor Cyan
-& cargo test -p pithos-representation-substrate -p pithos-native-codec-v18
-if ($LASTEXITCODE -ne 0) {
-    throw 'PRS1/native-v18 tests failed.'
+$targetedTestsExit = Invoke-PithosNativeProcess `
+    -FilePath 'cargo' `
+    -Arguments @('test','-p','pithos-representation-substrate','-p','pithos-native-codec-v18')
+if ($targetedTestsExit -ne 0) {
+    throw "PRS1/native-v18 tests failed with exit code $targetedTestsExit."
 }
 
 Write-Host "`n=== PRS1 R5 STATIC GATE 5/5: WORKSPACE REGRESSION + RELEASE ===" -ForegroundColor Cyan
-& cargo test --workspace
-if ($LASTEXITCODE -ne 0) {
-    throw 'workspace tests failed.'
+$workspaceTestsExit = Invoke-PithosNativeProcess `
+    -FilePath 'cargo' `
+    -Arguments @('test','--workspace')
+if ($workspaceTestsExit -ne 0) {
+    throw "workspace tests failed with exit code $workspaceTestsExit."
 }
 
-& cargo build --release -p pithos-cli
-if ($LASTEXITCODE -ne 0) {
-    throw 'release CLI build failed.'
+$releaseExit = Invoke-PithosNativeProcess `
+    -FilePath 'cargo' `
+    -Arguments @('build','--release','-p','pithos-cli')
+if ($releaseExit -ne 0) {
+    throw "release CLI build failed with exit code $releaseExit."
 }
 
-& git diff --check
-if ($LASTEXITCODE -ne 0) {
-    throw 'git diff --check failed after gates.'
+$diffCheckExit = Invoke-PithosNativeProcess `
+    -FilePath 'git' `
+    -Arguments @('diff','--check')
+if ($diffCheckExit -ne 0) {
+    throw "git diff --check failed after gates with exit code $diffCheckExit."
 }
 
 $shaAfterGates = (& git rev-parse HEAD).Trim()
@@ -160,6 +189,7 @@ if ($unexpected.Count -gt 0) {
 
 Write-Host "`n=== PRS1 R5 PRE-BENCHMARK CONTRACT PASS ===" -ForegroundColor Green
 Write-Host "source_commit=$sha"
+Write-Host 'native_process_failure_policy=EXIT_CODE_ONLY'
 Write-Host 'fmt=PASS'
 Write-Host 'clippy_warning_map=0'
 Write-Host 'strict_clippy=PASS'
@@ -181,11 +211,18 @@ Write-Host "`n=== PRS1 R5 PITHOS-ONLY FROZEN-BASELINE BENCHMARK ===" -Foreground
 Write-Host '7-Zip/WinRAR/WinZip executables are not run.' -ForegroundColor Yellow
 $env:PITHOS_REP_TRACE = '1'
 try {
-    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'run-tst-compact-frozen-baseline.ps1') `
-        -Corpus $Corpus `
-        -PhaseMaxTotalMiB $PhaseMaxTotalMiB `
-        -ExternalEvidenceRoot $ExternalEvidenceRoot 2>&1 | Tee-Object -FilePath $tracePath
-    $benchmarkExit = $LASTEXITCODE
+    $benchmarkArguments = @(
+        '-NoProfile',
+        '-ExecutionPolicy','Bypass',
+        '-File',(Join-Path $PSScriptRoot 'run-tst-compact-frozen-baseline.ps1'),
+        '-Corpus',$Corpus,
+        '-PhaseMaxTotalMiB',[string]$PhaseMaxTotalMiB,
+        '-ExternalEvidenceRoot',$ExternalEvidenceRoot
+    )
+    $benchmarkExit = Invoke-PithosNativeProcess `
+        -FilePath 'powershell' `
+        -Arguments $benchmarkArguments `
+        -LogPath $tracePath
 } finally {
     Remove-Item Env:PITHOS_REP_TRACE -ErrorAction SilentlyContinue
 }
@@ -235,6 +272,7 @@ $summaryPath = Join-Path $evidence.FullName 'PRS1_R5_SUMMARY.txt'
     "timestamp_utc=$((Get-Date).ToUniversalTime().ToString('o'))",
     "branch=$branch",
     "source_commit=$sha",
+    'native_process_failure_policy=EXIT_CODE_ONLY',
     "representation_races=$($raceRows.Count)",
     "prs1_wins=$prs1Wins",
     "v12_wins=$v12Wins",
