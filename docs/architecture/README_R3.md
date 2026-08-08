@@ -1,0 +1,1 @@
+R3 is the representation-first compression program. See R3_REPRESENTATION_MODEL.md and per-branch notes.
