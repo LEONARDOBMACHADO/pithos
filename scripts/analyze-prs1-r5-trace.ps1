@@ -173,6 +173,28 @@ if ($unexpectedLevels.Count -gt 0) {
     throw "Unexpected PRS1 trace level(s) found: $($unexpectedLevels.Count)"
 }
 
+$missingEntropyLevels = @($allCandidateRows | Where-Object {
+    [string]::IsNullOrWhiteSpace($_.prs1_entropy_level)
+})
+if ($missingEntropyLevels.Count -gt 0) {
+    $missingEntropyLevels | Export-Csv -LiteralPath (Join-Path $EvidencePath 'prs1-missing-entropy-level.csv') -NoTypeInformation -Encoding UTF8
+    throw "PRS1 trace is missing entropy-level evidence on $($missingEntropyLevels.Count) row(s)."
+}
+$wrongProbeEntropy = @($allCandidateRows | Where-Object {
+    $_.level -eq '3' -and $_.prs1_entropy_level -ne '3'
+})
+if ($wrongProbeEntropy.Count -gt 0) {
+    $wrongProbeEntropy | Export-Csv -LiteralPath (Join-Path $EvidencePath 'prs1-wrong-probe-entropy-level.csv') -NoTypeInformation -Encoding UTF8
+    throw "PRS1 probe entropy level mismatch on $($wrongProbeEntropy.Count) row(s); expected 3."
+}
+$wrongArchiveMaxEntropy = @($allCandidateRows | Where-Object {
+    $_.level -eq '15' -and $_.prs1_entropy_level -ne '19'
+})
+if ($wrongArchiveMaxEntropy.Count -gt 0) {
+    $wrongArchiveMaxEntropy | Export-Csv -LiteralPath (Join-Path $EvidencePath 'prs1-wrong-archive-max-entropy-level.csv') -NoTypeInformation -Encoding UTF8
+    throw "PRS1 ArchiveMax entropy level mismatch on $($wrongArchiveMaxEntropy.Count) row(s); expected 19."
+}
+
 $winningRaceRows = @($allRaceRows | Where-Object { Is-WinningArchiveRow $_ })
 $winningSummaryRows = @($allSummaryRows | Where-Object { Is-WinningArchiveRow $_ })
 $winningPlaneRows = @($allPlaneRows | Where-Object { Is-WinningArchiveRow $_ })
@@ -384,6 +406,7 @@ $summaryPath = Join-Path $EvidencePath 'PRS1_R5_SUMMARY.txt'
     "source_commit=$SourceCommit",
     'native_process_failure_policy=EXIT_CODE_ONLY',
     'benchmark_profiles=archive-max-only',
+    'prs1_archive_max_entropy_level=19',
     'evidence_scope=final_physical_groups_from_winning_archive_candidates',
     "cases_with_archive_winner=$($winnerByCase.Count)",
     "final_groups=$($finalGroups.Count)",
