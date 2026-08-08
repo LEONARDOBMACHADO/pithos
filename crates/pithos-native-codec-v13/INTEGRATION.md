@@ -1,0 +1,1 @@
+Engine integration keeps the crate alias `pithos-native-codec`; only the package path advances from v12 to v13 so all existing call sites continue to use `encode_exact_dedup` / `decode_exact_dedup` without API churn.
