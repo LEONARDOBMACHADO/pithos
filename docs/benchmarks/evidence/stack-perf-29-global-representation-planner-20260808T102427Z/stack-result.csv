@@ -1,0 +1,3 @@
+﻿"branch","commit","compressor","profile","original_bytes","archive_bytes","savings_percent","compress_ms","verify_ms","decompress_ms","tree_sha256","status"
+"perf/29-global-representation-planner","a47d199795a6987b26ce64b1209e9b25b65ea5f5","pithos","archive-max","499318122","85974492","82.78162","1653676.618","4788.669","4950.478","469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4","ok"
+"perf/29-global-representation-planner","a47d199795a6987b26ce64b1209e9b25b65ea5f5","7zip","lzma2-mx9-solid","499318122","86352021","82.706011","69381.353","3812.037","4189.643","469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4","ok"

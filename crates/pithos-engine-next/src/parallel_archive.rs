@@ -21,17 +21,20 @@ pub(crate) fn verify_with_control(
         .map(|restore| (restore.entry_id, restore))
         .collect::<HashMap<_, _>>();
 
-    catalog.groups.par_iter().try_for_each(|group| -> Result<()> {
-        checkpoint(cancellation)?;
-        let mut file = File::open(archive)?;
-        let decoded = native_archive::decode_group(
-            &mut file,
-            group,
-            &catalog.registry,
-            limits,
-            cancellation,
-        )?;
-        for entry in catalog.entries.iter().filter(|entry| {
+    catalog
+        .groups
+        .par_iter()
+        .try_for_each(|group| -> Result<()> {
+            checkpoint(cancellation)?;
+            let mut file = File::open(archive)?;
+            let decoded = native_archive::decode_group(
+                &mut file,
+                group,
+                &catalog.registry,
+                limits,
+                cancellation,
+            )?;
+            for entry in catalog.entries.iter().filter(|entry| {
             matches!(entry.kind, EntryKind::File { group_id } if group_id == group.group.group_id)
         }) {
             let restore = restore_by_entry
@@ -43,11 +46,17 @@ pub(crate) fn verify_with_control(
                 return Err(PithosError::HashMismatch);
             }
         }
-        Ok(())
-    })?;
+            Ok(())
+        })?;
 
     let root = read_footer_root(archive)?;
-    Ok(report(&catalog.entries, catalog.header.original_total_size, catalog.groups.len(), fs::metadata(archive)?.len(), root))
+    Ok(report(
+        &catalog.entries,
+        catalog.header.original_total_size,
+        catalog.groups.len(),
+        fs::metadata(archive)?.len(),
+        root,
+    ))
 }
 
 pub(crate) fn unpack_with_control_and_temp_limit(
@@ -91,17 +100,20 @@ pub(crate) fn unpack_with_control_and_temp_limit(
     let archive_path = &request.archive;
     let staging_path = staging.path();
 
-    catalog.groups.par_iter().try_for_each(|group| -> Result<()> {
-        checkpoint(cancellation)?;
-        let mut archive = File::open(archive_path)?;
-        let decoded = native_archive::decode_group(
-            &mut archive,
-            group,
-            &catalog.registry,
-            limits,
-            cancellation,
-        )?;
-        for entry in catalog.entries.iter().filter(|entry| {
+    catalog
+        .groups
+        .par_iter()
+        .try_for_each(|group| -> Result<()> {
+            checkpoint(cancellation)?;
+            let mut archive = File::open(archive_path)?;
+            let decoded = native_archive::decode_group(
+                &mut archive,
+                group,
+                &catalog.registry,
+                limits,
+                cancellation,
+            )?;
+            for entry in catalog.entries.iter().filter(|entry| {
             matches!(entry.kind, EntryKind::File { group_id } if group_id == group.group.group_id)
         }) {
             let restore = restore_by_entry
@@ -124,8 +136,8 @@ pub(crate) fn unpack_with_control_and_temp_limit(
             output.sync_all()?;
             apply_file_mode(&destination, entry.mode)?;
         }
-        Ok(())
-    })?;
+            Ok(())
+        })?;
 
     for entry in catalog
         .entries

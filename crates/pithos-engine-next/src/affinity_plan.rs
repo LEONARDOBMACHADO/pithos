@@ -49,7 +49,9 @@ fn plan_global(lengths: &[u64]) -> Result<Vec<SolidGroupPlan>> {
         return Ok(Vec::new());
     }
     let total = lengths.iter().try_fold(0_u64, |total, length| {
-        total.checked_add(*length).ok_or(PithosError::IntegerOverflow)
+        total
+            .checked_add(*length)
+            .ok_or(PithosError::IntegerOverflow)
     })?;
     Ok(vec![SolidGroupPlan::new(0, lengths.len(), total)])
 }
@@ -68,7 +70,9 @@ fn plan_class_aware(
     let mut total = 0_u64;
     let mut class = classes[0];
     for (index, (&next_class, &length)) in classes.iter().zip(lengths).enumerate() {
-        let combined = total.checked_add(length).ok_or(PithosError::IntegerOverflow)?;
+        let combined = total
+            .checked_add(length)
+            .ok_or(PithosError::IntegerOverflow)?;
         let new_class = count > 0 && next_class != class;
         let over_target = count > 0 && combined > target_bytes;
         if new_class || over_target {
@@ -79,7 +83,9 @@ fn plan_class_aware(
             class = next_class;
         }
         count = count.checked_add(1).ok_or(PithosError::IntegerOverflow)?;
-        total = total.checked_add(length).ok_or(PithosError::IntegerOverflow)?;
+        total = total
+            .checked_add(length)
+            .ok_or(PithosError::IntegerOverflow)?;
     }
     groups.push(SolidGroupPlan::new(start, count, total));
     Ok(groups)

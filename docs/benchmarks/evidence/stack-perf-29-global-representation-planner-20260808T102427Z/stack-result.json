@@ -1,0 +1,30 @@
+﻿[
+    {
+        "branch":  "perf/29-global-representation-planner",
+        "commit":  "a47d199795a6987b26ce64b1209e9b25b65ea5f5",
+        "compressor":  "pithos",
+        "profile":  "archive-max",
+        "original_bytes":  499318122,
+        "archive_bytes":  85974492,
+        "savings_percent":  82.78162,
+        "compress_ms":  1653676.618,
+        "verify_ms":  4788.669,
+        "decompress_ms":  4950.478,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    },
+    {
+        "branch":  "perf/29-global-representation-planner",
+        "commit":  "a47d199795a6987b26ce64b1209e9b25b65ea5f5",
+        "compressor":  "7zip",
+        "profile":  "lzma2-mx9-solid",
+        "original_bytes":  499318122,
+        "archive_bytes":  86352021,
+        "savings_percent":  82.706011,
+        "compress_ms":  69381.353,
+        "verify_ms":  3812.037,
+        "decompress_ms":  4189.643,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    }
+]

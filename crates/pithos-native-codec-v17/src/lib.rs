@@ -33,7 +33,10 @@ pub fn encode_exact_dedup(
         pithos_native_v16::encode_exact_dedup(input, member_lengths, level)?;
     let baseline_len = baseline.len() as u64;
     if input.len() < MIN_INPUT_BYTES {
-        return Ok((baseline, convert_baseline_stats(baseline_stats, baseline_len)));
+        return Ok((
+            baseline,
+            convert_baseline_stats(baseline_stats, baseline_len),
+        ));
     }
 
     let transformed = transpose_quaternary(input);
@@ -54,7 +57,10 @@ pub fn encode_exact_dedup(
     wrapped.extend_from_slice(&inner);
 
     if wrapped.len() as u64 >= baseline_len {
-        return Ok((baseline, convert_baseline_stats(baseline_stats, baseline_len)));
+        return Ok((
+            baseline,
+            convert_baseline_stats(baseline_stats, baseline_len),
+        ));
     }
     let encoded_bytes = wrapped.len() as u64;
     Ok((
@@ -89,7 +95,9 @@ pub fn decode_exact_dedup(payload: &[u8], expected_len: u64) -> Result<Vec<u8>> 
         return Err(PithosError::InvalidRange);
     }
     let transformed = pithos_native_core::decode_exact_dedup(
-        payload.get(HEADER_LEN..end).ok_or(PithosError::InvalidRange)?,
+        payload
+            .get(HEADER_LEN..end)
+            .ok_or(PithosError::InvalidRange)?,
         transformed_len,
     )?;
     inverse_quaternary(&transformed, expected_len)
@@ -144,12 +152,16 @@ fn convert_baseline_stats(
 }
 
 fn read_u16(bytes: &[u8], offset: usize) -> Result<u16> {
-    let slice = bytes.get(offset..offset + 2).ok_or(PithosError::InvalidRange)?;
+    let slice = bytes
+        .get(offset..offset + 2)
+        .ok_or(PithosError::InvalidRange)?;
     Ok(u16::from_le_bytes([slice[0], slice[1]]))
 }
 
 fn read_u64(bytes: &[u8], offset: usize) -> Result<u64> {
-    let slice = bytes.get(offset..offset + 8).ok_or(PithosError::InvalidRange)?;
+    let slice = bytes
+        .get(offset..offset + 8)
+        .ok_or(PithosError::InvalidRange)?;
     Ok(u64::from_le_bytes([
         slice[0], slice[1], slice[2], slice[3], slice[4], slice[5], slice[6], slice[7],
     ]))
@@ -161,7 +173,9 @@ mod tests {
 
     #[test]
     fn quaternary_transpose_roundtrips_arbitrary_length() {
-        let input = (0..1003).map(|value| (value * 37) as u8).collect::<Vec<_>>();
+        let input = (0..1003)
+            .map(|value| (value * 37) as u8)
+            .collect::<Vec<_>>();
         let transformed = transpose_quaternary(&input);
         assert_eq!(
             inverse_quaternary(&transformed, input.len() as u64).unwrap(),
@@ -174,6 +188,9 @@ mod tests {
         let input = b"{\"agent\":\"pithos\",\"value\":123}\n".repeat(64 * 1024);
         let lengths = [input.len() as u64];
         let (payload, _) = encode_exact_dedup(&input, &lengths, 15).unwrap();
-        assert_eq!(decode_exact_dedup(&payload, input.len() as u64).unwrap(), input);
+        assert_eq!(
+            decode_exact_dedup(&payload, input.len() as u64).unwrap(),
+            input
+        );
     }
 }

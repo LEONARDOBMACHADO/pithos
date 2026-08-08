@@ -25,12 +25,10 @@ pub fn encode_exact_dedup(
     level: i32,
 ) -> Result<(Vec<u8>, NativeStats)> {
     let (current_result, floor_result) = std::thread::scope(|scope| {
-        let current = scope.spawn(|| {
-            pithos_native_current::encode_exact_dedup(input, member_lengths, level)
-        });
-        let floor = scope.spawn(|| {
-            pithos_native_floor::encode_exact_dedup(input, member_lengths, level)
-        });
+        let current =
+            scope.spawn(|| pithos_native_current::encode_exact_dedup(input, member_lengths, level));
+        let floor =
+            scope.spawn(|| pithos_native_floor::encode_exact_dedup(input, member_lengths, level));
         (current.join(), floor.join())
     });
     let current = current_result
@@ -80,6 +78,9 @@ mod tests {
         input.extend_from_slice(&member);
         let lengths = [member.len() as u64, member.len() as u64];
         let (payload, _) = encode_exact_dedup(&input, &lengths, 15).unwrap();
-        assert_eq!(decode_exact_dedup(&payload, input.len() as u64).unwrap(), input);
+        assert_eq!(
+            decode_exact_dedup(&payload, input.len() as u64).unwrap(),
+            input
+        );
     }
 }
