@@ -375,8 +375,7 @@ fn choose_with_prescreen(
         return encode_standard_selection(input, selection, false);
     }
     let standard_sample = deterministic_sample(input);
-    let standard_selection =
-        select_standard_selection(&standard_sample, profile, cancellation)?;
+    let standard_selection = select_standard_selection(&standard_sample, profile, cancellation)?;
     let standard_probe_bytes = standard_selection.primary_probe_bytes;
     let (native_sample, native_sample_lengths) =
         deterministic_member_sample(input, member_lengths)?;
