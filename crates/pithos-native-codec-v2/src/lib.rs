@@ -172,8 +172,7 @@ fn best_record(index: usize, bytes: &[u8], canonical: &[Vec<u8>]) -> Result<Reco
     let mut best_size = 5 + bytes.len();
     let mut best = Record::Literal(bytes.to_vec());
     let start = index.saturating_sub(SEARCH_BACK);
-    for base_index in start..index {
-        let base = &canonical[base_index];
+    for (base_index, base) in canonical.iter().enumerate().take(index).skip(start) {
         if base.len() == bytes.len() {
             let mut patches = Vec::new();
             for (offset, (&a, &b)) in base.iter().zip(bytes).enumerate() {
