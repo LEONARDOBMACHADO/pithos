@@ -1,0 +1,30 @@
+﻿[
+    {
+        "branch":  "perf/23-parallel-group-pack",
+        "commit":  "b0fb442482da433a71a880ec9b9036498efa84ab",
+        "compressor":  "pithos",
+        "profile":  "archive-max",
+        "original_bytes":  499318122,
+        "archive_bytes":  86084344,
+        "savings_percent":  82.75962,
+        "compress_ms":  227165.951,
+        "verify_ms":  7374.755,
+        "decompress_ms":  21055.428,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    },
+    {
+        "branch":  "perf/23-parallel-group-pack",
+        "commit":  "b0fb442482da433a71a880ec9b9036498efa84ab",
+        "compressor":  "7zip",
+        "profile":  "lzma2-mx9-solid",
+        "original_bytes":  499318122,
+        "archive_bytes":  86352021,
+        "savings_percent":  82.706011,
+        "compress_ms":  62160.196,
+        "verify_ms":  3329.499,
+        "decompress_ms":  3635.335,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    }
+]

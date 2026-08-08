@@ -1,0 +1,3 @@
+﻿"branch","commit","compressor","profile","original_bytes","archive_bytes","savings_percent","compress_ms","verify_ms","decompress_ms","tree_sha256","status"
+"perf/23-parallel-group-pack","b0fb442482da433a71a880ec9b9036498efa84ab","pithos","archive-max","499318122","86084344","82.75962","227165.951","7374.755","21055.428","469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4","ok"
+"perf/23-parallel-group-pack","b0fb442482da433a71a880ec9b9036498efa84ab","7zip","lzma2-mx9-solid","499318122","86352021","82.706011","62160.196","3329.499","3635.335","469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4","ok"
