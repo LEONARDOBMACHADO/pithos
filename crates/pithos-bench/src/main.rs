@@ -1,5 +1,6 @@
 use clap::Parser;
 use pithos_bench::{BenchmarkConfig, run_suite};
+use pithos_core::CompressionProfile;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -25,6 +26,10 @@ struct Args {
     #[arg(long)]
     individual_only: bool,
 
+    /// Run only the ArchiveMax profile. Intended for representation research gates.
+    #[arg(long)]
+    archive_max_only: bool,
+
     /// Do not invoke 7-Zip, WinRAR or WinZip even when their CLIs are installed.
     #[arg(long)]
     pithos_only: bool,
@@ -42,6 +47,9 @@ fn main() -> ExitCode {
     config.include_individual = !args.combined_only;
     config.include_combined = !args.individual_only;
     config.include_external = !args.pithos_only;
+    if args.archive_max_only {
+        config.profiles = vec![CompressionProfile::ArchiveMax];
+    }
 
     match run_suite(&config) {
         Ok(records) => {
