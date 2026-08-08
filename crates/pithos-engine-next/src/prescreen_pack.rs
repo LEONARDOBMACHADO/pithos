@@ -442,19 +442,25 @@ fn select_standard_candidate(
         probes.push((*candidate, output.len()));
     }
     probes.sort_by_key(|(candidate, bytes)| (*bytes, speed_rank(candidate.codec)));
-    let best_bytes = probes[0].1;
-    let tolerance = match profile {
-        CompressionProfile::ArchiveMax => 1.003,
-        CompressionProfile::Balanced => 1.01,
-        _ => 1.02,
+
+    // ArchiveMax means exactly that: prefer the smallest measured candidate.
+    // Other profiles intentionally keep their existing speed/ratio tolerance.
+    let (mut selected, mut selected_bytes) = if profile == CompressionProfile::ArchiveMax {
+        probes[0]
+    } else {
+        let best_bytes = probes[0].1;
+        let tolerance = match profile {
+            CompressionProfile::Balanced => 1.01,
+            _ => 1.02,
+        };
+        let mut eligible = probes
+            .iter()
+            .filter(|(_, bytes)| (*bytes as f64) <= best_bytes as f64 * tolerance)
+            .map(|(candidate, bytes)| (*candidate, *bytes))
+            .collect::<Vec<_>>();
+        eligible.sort_by_key(|(candidate, _)| speed_rank(candidate.codec));
+        eligible[0]
     };
-    let mut eligible = probes
-        .iter()
-        .filter(|(_, bytes)| (*bytes as f64) <= best_bytes as f64 * tolerance)
-        .map(|(candidate, bytes)| (*candidate, *bytes))
-        .collect::<Vec<_>>();
-    eligible.sort_by_key(|(candidate, _)| speed_rank(candidate.codec));
-    let (mut selected, mut selected_bytes) = eligible[0];
     if selected.codec != CodecId::Store && selected_bytes >= sample.len() {
         selected = Candidate {
             codec: CodecId::Store,
