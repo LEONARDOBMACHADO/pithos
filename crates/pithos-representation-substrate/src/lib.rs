@@ -597,11 +597,6 @@ fn best_split(bytes: &[u8]) -> Option<usize> {
         return None;
     }
     let whole = intrinsic_cost_estimate(bytes);
-    let min_part = MIN_CELL_BYTES.min(bytes.len() / 2);
-    if min_part == 0 {
-        return None;
-    }
-
     let raw_points = [bytes.len() / 4, bytes.len() / 2, bytes.len() * 3 / 4];
     let mut best = None::<(usize, usize)>;
     for point in raw_points {
@@ -655,7 +650,10 @@ fn intrinsic_cost_estimate(bytes: &[u8]) -> usize {
 
 fn has_strong_single_model(bytes: &[u8]) -> bool {
     let feature = feature_vector(bytes);
-    feature.unique <= 4 || feature.dominant_pct >= 92 || feature.transition_pct <= 8
+    feature.unique <= 4
+        || feature.dominant_pct >= 92
+        || feature.transition_pct <= 8
+        || feature.zero_pct >= 92
 }
 
 fn feature_vector(bytes: &[u8]) -> FeatureVector {
@@ -1272,11 +1270,10 @@ fn encode_xor_nibble_axes(bytes: &[u8]) -> (Vec<u8>, Vec<u8>) {
 fn encode_even_odd_axes(bytes: &[u8]) -> (Vec<u8>, Vec<u8>) {
     let mut even = Vec::with_capacity(bytes.len().div_ceil(2));
     let mut odd = Vec::with_capacity(bytes.len() / 2);
-    for (index, byte) in bytes.iter().copied().enumerate() {
-        if index % 2 == 0 {
-            even.push(byte);
-        } else {
-            odd.push(byte);
+    for pair in bytes.chunks(2) {
+        even.push(pair[0]);
+        if let Some(second) = pair.get(1) {
+            odd.push(*second);
         }
     }
     (even, odd)
@@ -1301,13 +1298,12 @@ fn decode_axes(mode: u8, axis_a: &[u8], axis_b: &[u8], expected: usize) -> Resul
                 return Err(PithosError::InvalidMetadata("PRS1 even-odd length"));
             }
             let mut output = Vec::with_capacity(expected);
-            for index in 0..expected {
-                let value = if index % 2 == 0 {
-                    axis_a[index / 2]
-                } else {
-                    axis_b[index / 2]
-                };
-                output.push(value);
+            for (&even, &odd) in axis_a.iter().zip(axis_b) {
+                output.push(even);
+                output.push(odd);
+            }
+            if axis_a.len() > axis_b.len() {
+                output.push(*axis_a.last().ok_or(PithosError::InvalidRange)?);
             }
             Ok(output)
         }
@@ -1372,7 +1368,7 @@ fn encode_defects(bytes: &[u8]) -> Option<(Vec<u8>, usize, Vec<u8>)> {
         defects += 1;
         previous = Some(position);
     }
-    if defects == 0 || payload.len().saturating_add(pattern.len() + 10) >= bytes.len() {
+    if payload.len().saturating_add(pattern.len() + 10) >= bytes.len() {
         None
     } else {
         Some((pattern, defects, payload))
@@ -1383,8 +1379,8 @@ fn periodic_pattern(bytes: &[u8], period: usize) -> Vec<u8> {
     let mut pattern = Vec::with_capacity(period);
     for residue in 0..period {
         let mut counts = [0_u32; 256];
-        for index in (residue..bytes.len()).step_by(period) {
-            counts[bytes[index] as usize] += 1;
+        for byte in bytes.iter().copied().skip(residue).step_by(period) {
+            counts[byte as usize] += 1;
         }
         let value = counts
             .iter()
@@ -1756,7 +1752,9 @@ fn varint_len(mut value: u64) -> usize {
 
 fn take_descriptor_byte(bytes: &[u8], pos: &mut usize) -> Result<u8> {
     let value = *bytes.get(*pos).ok_or(PithosError::InvalidRange)?;
-    *pos = pos.checked_add(1).ok_or(PithosError::IntegerOverflow)?;
+    *pos = (*pos)
+        .checked_add(1)
+        .ok_or(PithosError::IntegerOverflow)?;
     Ok(value)
 }
 
@@ -1843,8 +1841,8 @@ mod tests {
     fn binary_combinadic_roundtrips_skewed_mixture() {
         let alphabet = [0_u8, 1_u8];
         let mut input = vec![0_u8; 4096];
-        for index in (0..input.len()).step_by(61) {
-            input[index] = 1;
+        for value in input.iter_mut().step_by(61) {
+            *value = 1;
         }
         let encoded = encode_binary_combinadic(&input, &alphabet);
         assert_eq!(decode_binary_combinadic(&encoded, &alphabet, input.len()).unwrap(), input);
@@ -1857,8 +1855,8 @@ mod tests {
         let mut input = (0..128 * 1024)
             .map(|index| pattern[index % pattern.len()])
             .collect::<Vec<_>>();
-        for index in (0..input.len()).step_by(4093) {
-            input[index] ^= 0x5a;
+        for value in input.iter_mut().step_by(4093) {
+            *value ^= 0x5a;
         }
         let (model, defects, payload) = encode_defects(&input).unwrap();
         assert_eq!(model.len(), 4);
@@ -1894,8 +1892,9 @@ mod tests {
     #[test]
     fn recursive_partition_uses_model_cost_and_respects_boundaries() {
         let mut left = vec![0_u8; MAX_CELL_BYTES + 12345];
-        for index in left.len() / 2..left.len() {
-            left[index] = ((index * 191 + 7) % 251) as u8;
+        let half = left.len() / 2;
+        for (index, byte) in left.iter_mut().enumerate().skip(half) {
+            *byte = ((index * 191 + 7) % 251) as u8;
         }
         let right = (0..MAX_CELL_BYTES + 54321)
             .map(|index| (index % 251) as u8)
@@ -1916,8 +1915,8 @@ mod tests {
             .map(|index| [b'A', b'B', b'C', b'D'][index % 4])
             .collect::<Vec<_>>();
         let mut defect = vec![0_u8; 256 * 1024];
-        for index in (0..defect.len()).step_by(997) {
-            defect[index] = 7;
+        for value in defect.iter_mut().step_by(997) {
+            *value = 7;
         }
         let mut transition = Vec::new();
         for index in 0..4096 {
