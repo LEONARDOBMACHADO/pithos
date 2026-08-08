@@ -23,6 +23,17 @@ function Invoke-PithosNativeProcess {
     $command = Get-Command $FilePath -ErrorAction Stop
     $resolvedPath = if ($command.Path) { $command.Path } else { $FilePath }
 
+    # Windows PowerShell 5.1 re-serializes native argv through a legacy command
+    # line representation. Embedded quotes in an inline `-Command` payload can
+    # therefore be lost before powershell.exe receives them. Never allow that
+    # fragile path through the generic native helper. Inline PowerShell must go
+    # through Invoke-PithosNativePowerShellEncoded below; `-File` remains valid.
+    $nativeLeaf = [System.IO.Path]::GetFileName($resolvedPath)
+    $isPowerShellHost = $nativeLeaf -match '^(?i:powershell|pwsh)(\.exe)?$'
+    if ($isPowerShellHost -and ($Arguments -contains '-Command')) {
+        throw 'Unsafe native PowerShell -Command invocation rejected. Use Invoke-PithosNativePowerShellEncoded so the payload is transported with -EncodedCommand.'
+    }
+
     $previousErrorActionPreference = $ErrorActionPreference
     $exitCode = $null
 
@@ -67,4 +78,29 @@ function Invoke-PithosNativeProcess {
     }
 
     return [int]$exitCode
+}
+
+function Invoke-PithosNativePowerShellEncoded {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)][string]$ScriptText,
+        [string]$PowerShellPath = 'powershell',
+        [string]$LogPath = '',
+        [switch]$AppendLog,
+        [switch]$DiscardOutput
+    )
+
+    # powershell.exe -EncodedCommand requires UTF-16LE (Encoding.Unicode).
+    # The resulting Base64 argv contains no embedded quotes, whitespace or
+    # shell metacharacters, avoiding the PowerShell 5.1 native re-quoting path.
+    $encodedCommand = [Convert]::ToBase64String(
+        [System.Text.Encoding]::Unicode.GetBytes($ScriptText)
+    )
+
+    return Invoke-PithosNativeProcess `
+        -FilePath $PowerShellPath `
+        -Arguments @('-NoProfile','-EncodedCommand',$encodedCommand) `
+        -LogPath $LogPath `
+        -AppendLog:$AppendLog `
+        -DiscardOutput:$DiscardOutput
 }
