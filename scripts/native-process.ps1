@@ -12,6 +12,11 @@ function Invoke-PithosNativeProcess {
         [switch]$DiscardOutput
     )
 
+    # Resolve before changing ErrorActionPreference so command-not-found is a
+    # normal terminating harness error, never a stale LASTEXITCODE result.
+    $command = Get-Command $FilePath -ErrorAction Stop
+    $resolvedPath = if ($command.Path) { $command.Path } else { $FilePath }
+
     $previousErrorActionPreference = $ErrorActionPreference
     $exitCode = $null
 
@@ -22,18 +27,22 @@ function Invoke-PithosNativeProcess {
         # success must be decided by the process exit code, never by stderr.
         $ErrorActionPreference = 'Continue'
 
+        # LASTEXITCODE is process-global state and can otherwise retain the
+        # result of an earlier command when process startup itself fails.
+        $global:LASTEXITCODE = $null
+
         if ([string]::IsNullOrWhiteSpace($LogPath)) {
-            & $FilePath @Arguments 2>&1 | ForEach-Object {
+            & $resolvedPath @Arguments 2>&1 | ForEach-Object {
                 if (-not $DiscardOutput) { Write-Host $_ }
             }
         } elseif ($AppendLog) {
-            & $FilePath @Arguments 2>&1 |
+            & $resolvedPath @Arguments 2>&1 |
                 Tee-Object -FilePath $LogPath -Append |
                 ForEach-Object {
                     if (-not $DiscardOutput) { Write-Host $_ }
                 }
         } else {
-            & $FilePath @Arguments 2>&1 |
+            & $resolvedPath @Arguments 2>&1 |
                 Tee-Object -FilePath $LogPath |
                 ForEach-Object {
                     if (-not $DiscardOutput) { Write-Host $_ }
@@ -48,7 +57,7 @@ function Invoke-PithosNativeProcess {
     }
 
     if ($null -eq $exitCode) {
-        throw "Native process completed without an exit code: $FilePath"
+        throw "Native process completed without an exit code: $resolvedPath"
     }
 
     return [int]$exitCode
