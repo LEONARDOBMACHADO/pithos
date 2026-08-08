@@ -1,0 +1,30 @@
+﻿[
+    {
+        "branch":  "feat/25-global-canonical-pool",
+        "commit":  "e1e7c83ca04648c94a147224cb4a7d0259aadda5",
+        "compressor":  "pithos",
+        "profile":  "archive-max",
+        "original_bytes":  499318122,
+        "archive_bytes":  86440300,
+        "savings_percent":  82.688331,
+        "compress_ms":  285833.922,
+        "verify_ms":  10430.623,
+        "decompress_ms":  15269.569,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    },
+    {
+        "branch":  "feat/25-global-canonical-pool",
+        "commit":  "e1e7c83ca04648c94a147224cb4a7d0259aadda5",
+        "compressor":  "7zip",
+        "profile":  "lzma2-mx9-solid",
+        "original_bytes":  499318122,
+        "archive_bytes":  86352021,
+        "savings_percent":  82.706011,
+        "compress_ms":  81869.789,
+        "verify_ms":  4087.777,
+        "decompress_ms":  4041.854,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    }
+]
