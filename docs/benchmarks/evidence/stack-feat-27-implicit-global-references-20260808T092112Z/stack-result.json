@@ -1,0 +1,30 @@
+﻿[
+    {
+        "branch":  "feat/27-implicit-global-references",
+        "commit":  "dc13f586b4aafd6c2b3eb71c56473347553bb5b7",
+        "compressor":  "pithos",
+        "profile":  "archive-max",
+        "original_bytes":  499318122,
+        "archive_bytes":  86153416,
+        "savings_percent":  82.745786,
+        "compress_ms":  537323.261,
+        "verify_ms":  6112.513,
+        "decompress_ms":  7723.301,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    },
+    {
+        "branch":  "feat/27-implicit-global-references",
+        "commit":  "dc13f586b4aafd6c2b3eb71c56473347553bb5b7",
+        "compressor":  "7zip",
+        "profile":  "lzma2-mx9-solid",
+        "original_bytes":  499318122,
+        "archive_bytes":  86352019,
+        "savings_percent":  82.706011,
+        "compress_ms":  94631.794,
+        "verify_ms":  4443.838,
+        "decompress_ms":  4734.901,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    }
+]
