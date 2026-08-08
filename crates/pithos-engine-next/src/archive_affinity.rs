@@ -19,7 +19,7 @@ pub(crate) fn sort_key(bytes: &[u8], entry_id: u64) -> (ContentClass, [u8; 8], u
     )
 }
 
-fn classify(bytes: &[u8]) -> ContentClass {
+pub(crate) fn classify(bytes: &[u8]) -> ContentClass {
     if bytes.starts_with(b"PK\x03\x04")
         || bytes.starts_with(&[0x1f, 0x8b])
         || bytes.starts_with(b"7z\xbc\xaf\x27\x1c")
