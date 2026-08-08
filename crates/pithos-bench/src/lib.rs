@@ -165,6 +165,16 @@ fn run_pithos_case(
         Some(archive.to_string_lossy().into_owned()),
     );
 
+    if representation_trace_enabled() {
+        eprintln!(
+            "PITHOS_REP_TRACE\tstage=benchmark_case\tcase={}\tprofile={}\tinput_bytes={}\tinputs={}",
+            case.name,
+            profile_name,
+            original_bytes,
+            case.inputs.len()
+        );
+    }
+
     let pack_started = Instant::now();
     let pack_result = pack(PackRequest {
         inputs: case.inputs.clone(),
@@ -518,6 +528,15 @@ fn external_profile_name(kind: ExternalKind) -> &'static str {
         ExternalKind::WinRar => "rar5-m5-solid",
         ExternalKind::WinZip => "zip-best",
     }
+}
+
+fn representation_trace_enabled() -> bool {
+    std::env::var("PITHOS_REP_TRACE").ok().is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
 }
 
 fn sanitize_name(value: &str) -> String {
