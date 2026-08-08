@@ -33,13 +33,21 @@ foreach ($script in $scripts) {
         })
     }
 
-    foreach ($hit in @(Select-String -LiteralPath $script.FullName -Pattern $ambiguousPattern -AllMatches)) {
-        foreach ($match in $hit.Matches) {
+    # Only inspect strings that PowerShell actually expands. This deliberately
+    # ignores comments and single-quoted literals while still catching the
+    # `$name:` ambiguity that PowerShell interprets as a drive-qualified
+    # variable. Legitimate scoped references such as $env:TEMP and
+    # $global:LASTEXITCODE do not match because the colon is followed by a
+    # valid variable-name character.
+    foreach ($token in @($tokens | Where-Object {
+        $_.Kind -in @('StringExpandable', 'HereStringExpandable')
+    })) {
+        foreach ($match in [regex]::Matches($token.Text, $ambiguousPattern)) {
             $ambiguousFailures.Add([pscustomobject]@{
                 path = $script.FullName
-                line = $hit.LineNumber
+                line = $token.Extent.StartLineNumber
                 token = $match.Value
-                source = $hit.Line.Trim()
+                source = $token.Text
             })
         }
     }
@@ -49,7 +57,7 @@ if ($ambiguousFailures.Count -gt 0) {
     Write-Host "`n===== COMPLETE AMBIGUOUS VARIABLE-COLON MAP =====" -ForegroundColor Red
     $ambiguousFailures |
         Sort-Object path,line |
-        Format-Table path,line,token,source -AutoSize |
+        Format-Table path,line,token,source -Wrap -AutoSize |
         Out-String |
         Write-Host
 }
@@ -68,4 +76,3 @@ if ($ambiguousFailures.Count -gt 0 -or $parseFailures.Count -gt 0) {
 }
 
 Write-Host "POWERSHELL SOURCE MAP: PASS ($($scripts.Count) scripts; 0 ambiguous variable-colon references; 0 parse errors)" -ForegroundColor Green
-exit 0
