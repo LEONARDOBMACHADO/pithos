@@ -1,0 +1,30 @@
+﻿[
+    {
+        "branch":  "perf/24-parallel-native-read",
+        "commit":  "2ebe14d6a0ff41cba6f85cff251e1044c1e2a198",
+        "compressor":  "pithos",
+        "profile":  "archive-max",
+        "original_bytes":  499318122,
+        "archive_bytes":  86084344,
+        "savings_percent":  82.75962,
+        "compress_ms":  245580.834,
+        "verify_ms":  4727.81,
+        "decompress_ms":  6236.923,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    },
+    {
+        "branch":  "perf/24-parallel-native-read",
+        "commit":  "2ebe14d6a0ff41cba6f85cff251e1044c1e2a198",
+        "compressor":  "7zip",
+        "profile":  "lzma2-mx9-solid",
+        "original_bytes":  499318122,
+        "archive_bytes":  86352022,
+        "savings_percent":  82.706011,
+        "compress_ms":  98289.209,
+        "verify_ms":  6762.373,
+        "decompress_ms":  7232.98,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    }
+]
