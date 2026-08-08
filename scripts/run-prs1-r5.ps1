@@ -190,6 +190,7 @@ if ($unexpected.Count -gt 0) {
 Write-Host "`n=== PRS1 R5 PRE-BENCHMARK CONTRACT PASS ===" -ForegroundColor Green
 Write-Host "source_commit=$sha"
 Write-Host 'native_process_failure_policy=EXIT_CODE_ONLY'
+Write-Host 'benchmark_profiles=archive-max-only'
 Write-Host 'fmt=PASS'
 Write-Host 'clippy_warning_map=0'
 Write-Host 'strict_clippy=PASS'
@@ -257,11 +258,33 @@ Get-Content -LiteralPath $tracePath | ForEach-Object {
 if ($traceRows.Count -eq 0) { throw 'No PITHOS_REP_TRACE rows captured.' }
 $traceRows | Export-Csv -LiteralPath (Join-Path $evidence.FullName 'prs1-trace.csv') -NoTypeInformation -Encoding UTF8
 
-$raceRows = @($traceRows | Where-Object { $_.stage -eq 'representation_race' })
-$summaryRows = @($traceRows | Where-Object { $_.stage -eq 'prs1_summary' })
+$allRaceRows = @($traceRows | Where-Object { $_.stage -eq 'representation_race' })
+$allSummaryRows = @($traceRows | Where-Object { $_.stage -eq 'prs1_summary' })
+$probeRaceRows = @($allRaceRows | Where-Object { $_.level -eq '3' })
+$probeSummaryRows = @($allSummaryRows | Where-Object { $_.level -eq '3' })
+$raceRows = @($allRaceRows | Where-Object { $_.level -eq '15' })
+$summaryRows = @($allSummaryRows | Where-Object { $_.level -eq '15' })
+$unexpectedLevels = @(
+    $allRaceRows + $allSummaryRows |
+        Where-Object { $_.level -notin @('3','15') }
+)
+if ($unexpectedLevels.Count -gt 0) {
+    $unexpectedLevels | Export-Csv -LiteralPath (Join-Path $evidence.FullName 'prs1-unexpected-trace-levels.csv') -NoTypeInformation -Encoding UTF8
+    throw "Unexpected PRS1 trace level(s) found: $($unexpectedLevels.Count). Evidence would be ambiguous."
+}
+if ($raceRows.Count -eq 0) {
+    throw 'No full ArchiveMax representation_race rows (level=15) captured.'
+}
+if ($summaryRows.Count -eq 0) {
+    throw 'No full ArchiveMax prs1_summary rows (level=15) captured.'
+}
+
 $prs1Wins = @($raceRows | Where-Object { $_.winner -eq 'prs1' }).Count
 $v12Wins = @($raceRows | Where-Object { $_.winner -eq 'v12' }).Count
 $v17Wins = @($raceRows | Where-Object { $_.winner -eq 'v17' }).Count
+$probePrs1Wins = @($probeRaceRows | Where-Object { $_.winner -eq 'prs1' }).Count
+$probeV12Wins = @($probeRaceRows | Where-Object { $_.winner -eq 'v12' }).Count
+$probeV17Wins = @($probeRaceRows | Where-Object { $_.winner -eq 'v17' }).Count
 
 $sum = {
     param([string]$Property)
@@ -273,11 +296,18 @@ $summaryPath = Join-Path $evidence.FullName 'PRS1_R5_SUMMARY.txt'
     "branch=$branch",
     "source_commit=$sha",
     'native_process_failure_policy=EXIT_CODE_ONLY',
+    'benchmark_profiles=archive-max-only',
+    'evidence_scope=full_archive_max_level_15_only',
     "representation_races=$($raceRows.Count)",
     "prs1_wins=$prs1Wins",
     "v12_wins=$v12Wins",
     "v17_wins=$v17Wins",
     "prs1_candidate_summaries=$($summaryRows.Count)",
+    "probe_representation_races=$($probeRaceRows.Count)",
+    "probe_prs1_wins=$probePrs1Wins",
+    "probe_v12_wins=$probeV12Wins",
+    "probe_v17_wins=$probeV17Wins",
+    "probe_candidate_summaries=$($probeSummaryRows.Count)",
     "raw_cells=$(& $sum 'raw')",
     "exact_ref_cells=$(& $sum 'exact_ref')",
     "overlay_cells=$(& $sum 'overlay')",
