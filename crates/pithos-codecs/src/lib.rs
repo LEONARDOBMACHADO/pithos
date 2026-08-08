@@ -1,5 +1,7 @@
 //! Codecs Portfolio Trait & STORE Codec
 
+mod lzma_tuned;
+
 use pithos_core::{PithosError, Result};
 use std::io::{Read, Write};
 
@@ -250,8 +252,11 @@ impl Codec for Lzma2Codec {
         output: &mut dyn Write,
     ) -> Result<CodecStats> {
         validate_level(cfg, 0..=9)?;
-        // The crate's default encoder is single-threaded.
-        let encoded = liblzma::encode_all(input, cfg.level as u32)?;
+        let encoded = if cfg.level == 9 {
+            lzma_tuned::encode_archive_max(input, cfg.level as u32)?
+        } else {
+            liblzma::encode_all(input, cfg.level as u32)?
+        };
         output.write_all(&encoded)?;
         Ok(stats(input, encoded.len()))
     }
@@ -323,6 +328,19 @@ mod tests {
                 .unwrap();
             assert_eq!(first, second, "{:?} must be deterministic", codec.id());
         }
+    }
+
+    #[test]
+    fn archive_max_lzma2_large_dictionary_roundtrips() {
+        let input = b"archive-max-large-dictionary".repeat(64 * 1024);
+        let cfg = CodecConfig { level: 9 };
+        let mut encoded = Vec::new();
+        Lzma2Codec.encode(&input, &cfg, &mut encoded).unwrap();
+        let mut decoded = Vec::new();
+        Lzma2Codec
+            .decode(&mut Cursor::new(encoded), input.len() as u64, &mut decoded)
+            .unwrap();
+        assert_eq!(decoded, input);
     }
 
     #[test]
