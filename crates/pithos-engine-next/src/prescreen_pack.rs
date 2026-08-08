@@ -21,7 +21,11 @@ const NATIVE_SAMPLE_MEMBER_BYTES: usize = 96 * 1024;
 const MAX_NATIVE_SAMPLE_BYTES: usize = 3 * 1024 * 1024;
 const NATIVE_CHAIN_ID: u32 = 5;
 const MIN_NATIVE_GROUP_BYTES: usize = 1024 * 1024;
-const ARCHIVE_MAX_OUTER_PARALLEL_MAX_INPUT_BYTES: usize = 64 * 1024 * 1024;
+// LZMA2-9 can retain a dictionary-sized working set while v18 runs its own
+// bounded v17/v12/PRS1 race. Keep the outer standard-vs-native overlap only for
+// genuinely small groups; larger groups still evaluate the exact same complete
+// candidate set, just sequentially to avoid nested oversubscription.
+const ARCHIVE_MAX_OUTER_PARALLEL_MAX_INPUT_BYTES: usize = 16 * 1024 * 1024;
 const IO_BUFFER_SIZE: usize = 64 * 1024;
 
 #[derive(Debug)]
