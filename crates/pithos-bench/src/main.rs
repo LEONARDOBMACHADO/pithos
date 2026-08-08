@@ -53,17 +53,32 @@ fn main() -> ExitCode {
 
     match run_suite(&config) {
         Ok(records) => {
-            let successful = records
+            let failed = records
                 .iter()
-                .filter(|record| record.status == "ok")
-                .count();
+                .filter(|record| record.status != "ok")
+                .collect::<Vec<_>>();
+            let successful = records.len().saturating_sub(failed.len());
             println!(
-                "benchmark complete: {} records ({} ok); results: {}",
+                "benchmark complete: {} records ({} ok, {} failed); results: {}",
                 records.len(),
                 successful,
+                failed.len(),
                 results.display()
             );
-            ExitCode::SUCCESS
+            if failed.is_empty() {
+                ExitCode::SUCCESS
+            } else {
+                for record in failed {
+                    eprintln!(
+                        "benchmark case failed: case={} compressor={} profile={} detail={}",
+                        record.case,
+                        record.compressor,
+                        record.profile,
+                        record.detail.as_deref().unwrap_or("unspecified")
+                    );
+                }
+                ExitCode::FAILURE
+            }
         }
         Err(error) => {
             eprintln!("benchmark failed: {error}");
