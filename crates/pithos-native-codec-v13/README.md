@@ -1,0 +1,1 @@
+Native v13 uses exact FastCDC deduplication with variable-length reference indexes, run tokens, variable-length canonical chunk lengths, and ArchiveMax entropy arbitration between Zstd and LZMA2. Older payloads remain readable through the v12 fallback.
