@@ -263,10 +263,10 @@ foreach ($choice in $winningGroupChoiceRows) {
         default { throw "Unknown final group chain_id=$chainId for $key" }
     }
     if ($chainId -ne 5 -and $codecId -ne ($chainId - 1)) {
-        throw "Standard chain/codec mismatch for $key: chain=$chainId codec=$codecId"
+        throw "Standard chain/codec mismatch for ${key}: chain=$chainId codec=$codecId"
     }
     if ($chainId -eq 5 -and $codecId -ne 4) {
-        throw "Native chain/codec mismatch for $key: chain=$chainId codec=$codecId"
+        throw "Native chain/codec mismatch for ${key}: chain=$chainId codec=$codecId"
     }
     if ($finalFamily -eq 'prs1') {
         $finalPrs1Keys[$key] = $true
