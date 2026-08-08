@@ -1,0 +1,120 @@
+use crate::{affinity_plan, prescreen_pack};
+use pithos_core::{CompressionProfile, PithosError, Result};
+use pithos_engine_legacy::{CancellationToken, PackLimits, PackRequest};
+use std::fs;
+use std::io::ErrorKind;
+use std::path::Path;
+
+pub fn pack(request: PackRequest) -> Result<()> {
+    pack_with_control(request, &CancellationToken::new())
+}
+
+pub fn pack_with_control(request: PackRequest, cancellation: &CancellationToken) -> Result<()> {
+    pack_with_limits_and_control(request, &PackLimits::default(), cancellation)
+}
+
+pub fn pack_with_limits_and_control(
+    request: PackRequest,
+    limits: &PackLimits,
+    cancellation: &CancellationToken,
+) -> Result<()> {
+    if request.profile != CompressionProfile::ArchiveMax {
+        return prescreen_pack::pack_with_limits_and_control(request, limits, cancellation);
+    }
+    checkpoint(cancellation)?;
+    if request.inputs.is_empty() {
+        return Err(PithosError::InvalidMetadata("nenhuma entrada"));
+    }
+    if path_entry_exists(&request.output)? {
+        return Err(PithosError::OutputExists);
+    }
+
+    // Explicit finite temporary-space budgets preserve their existing semantic:
+    // do not hold two full candidate archives at once. The proven class-aware
+    // strategy is used in that constrained mode. The default/unbounded planner
+    // performs exact complete-archive arbitration.
+    if limits.max_temp_bytes != u64::MAX {
+        return affinity_plan::with_mode(affinity_plan::PlannerMode::ClassAware, || {
+            prescreen_pack::pack_with_limits_and_control(request, limits, cancellation)
+        });
+    }
+
+    let PackRequest {
+        inputs,
+        output,
+        profile,
+    } = request;
+    let parent = output.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
+    let candidates = tempfile::Builder::new()
+        .prefix(".pithos-representation-planner-")
+        .tempdir_in(parent)?;
+    let class_path = candidates.path().join("class-aware.pits");
+    let global_path = candidates.path().join("global.pits");
+
+    affinity_plan::with_mode(affinity_plan::PlannerMode::ClassAware, || {
+        prescreen_pack::pack_with_limits_and_control(
+            PackRequest {
+                inputs: inputs.clone(),
+                output: class_path.clone(),
+                profile,
+            },
+            limits,
+            cancellation,
+        )
+    })?;
+    checkpoint(cancellation)?;
+
+    affinity_plan::with_mode(affinity_plan::PlannerMode::Global, || {
+        prescreen_pack::pack_with_limits_and_control(
+            PackRequest {
+                inputs,
+                output: global_path.clone(),
+                profile,
+            },
+            limits,
+            cancellation,
+        )
+    })?;
+    checkpoint(cancellation)?;
+
+    let class_bytes = fs::metadata(&class_path)?.len();
+    let global_bytes = fs::metadata(&global_path)?.len();
+    let winner = if global_bytes < class_bytes {
+        &global_path
+    } else {
+        &class_path
+    };
+    fs::rename(winner, &output)?;
+    sync_parent(&output)?;
+    Ok(())
+}
+
+fn checkpoint(cancellation: &CancellationToken) -> Result<()> {
+    if cancellation.is_cancelled() {
+        Err(PithosError::Cancelled)
+    } else {
+        Ok(())
+    }
+}
+
+fn path_entry_exists(path: &Path) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+#[cfg(unix)]
+fn sync_parent(path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::File::open(parent)?.sync_all()?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn sync_parent(_path: &Path) -> Result<()> {
+    Ok(())
+}

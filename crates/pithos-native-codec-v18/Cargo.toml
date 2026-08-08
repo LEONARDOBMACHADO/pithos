@@ -1,0 +1,11 @@
+[package]
+name = "pithos-native-codec-v18"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+pithos-core = { path = "../pithos-core" }
+pithos-native-current = { package = "pithos-native-codec-v17", path = "../pithos-native-codec-v17" }
+pithos-native-floor = { package = "pithos-native-codec-v12", path = "../pithos-native-codec-v12" }

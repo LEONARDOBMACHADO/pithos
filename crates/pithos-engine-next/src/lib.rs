@@ -17,9 +17,10 @@ mod native_pack;
 mod native_verify;
 mod parallel_archive;
 mod prescreen_pack;
+mod representation_planner;
 
 pub use compat_dispatch::{
     inspect, inspect_with_control, list, list_with_control, unpack, unpack_with_control,
     unpack_with_control_and_temp_limit, verify, verify_with_control, verify_with_limits,
 };
-pub use prescreen_pack::{pack, pack_with_control, pack_with_limits_and_control};
+pub use representation_planner::{pack, pack_with_control, pack_with_limits_and_control};
