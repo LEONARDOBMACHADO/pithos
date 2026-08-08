@@ -15,7 +15,7 @@ if (-not (Test-Path -LiteralPath $corpusPath -PathType Container)) { throw "Corp
 
 $baselinePath = Join-Path $repoPath 'docs\benchmarks\7zip-best-baseline.csv'
 if (-not (Test-Path -LiteralPath $baselinePath -PathType Leaf)) { throw "Frozen 7-Zip baseline not found: $baselinePath" }
-$combinedBaseline = Import-Csv -LiteralPath $baselinePath | Where-Object { $_.case_id -eq 'combined-all' } | Select-Object -First 1
+$combinedBaseline = Import-Csv -LiteralPath $baselinePath | Where-Object { $_.case -eq 'combined-all' } | Select-Object -First 1
 if ($null -eq $combinedBaseline) { throw 'combined-all row missing from frozen 7-Zip baseline.' }
 
 $pithosExe = Join-Path $repoPath 'target\release\pithos.exe'
