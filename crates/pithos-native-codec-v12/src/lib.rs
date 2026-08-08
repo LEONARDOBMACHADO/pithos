@@ -111,12 +111,14 @@ pub fn encode_exact_dedup(
         .map_err(|_| PithosError::ResourceLimit("native canonical chunks"))?;
 
     let mut representation = Vec::new();
-    representation.try_reserve(
-        sequence
-            .len()
-            .saturating_mul(4)
-            .saturating_add(input.len().saturating_sub(gross_duplicate_bytes as usize)),
-    ).map_err(|_| PithosError::MemoryLimit)?;
+    representation
+        .try_reserve(
+            sequence
+                .len()
+                .saturating_mul(4)
+                .saturating_add(input.len().saturating_sub(gross_duplicate_bytes as usize)),
+        )
+        .map_err(|_| PithosError::MemoryLimit)?;
     for index in &sequence {
         representation.extend_from_slice(&index.to_le_bytes());
     }
@@ -309,7 +311,10 @@ mod tests {
         let (payload, stats) = encode_exact_dedup(&input, &lengths, 15).unwrap();
         assert!(stats.gross_duplicate_bytes >= file.len() as u64);
         assert_eq!(read_u16(&payload, 6).unwrap(), CodecId::Lzma2 as u16);
-        assert_eq!(decode_exact_dedup(&payload, input.len() as u64).unwrap(), input);
+        assert_eq!(
+            decode_exact_dedup(&payload, input.len() as u64).unwrap(),
+            input
+        );
     }
 
     #[test]
@@ -324,6 +329,9 @@ mod tests {
         input.extend_from_slice(&second);
         let lengths = [first.len() as u64, second.len() as u64];
         let (payload, _) = encode_exact_dedup(&input, &lengths, 15).unwrap();
-        assert_eq!(decode_exact_dedup(&payload, input.len() as u64).unwrap(), input);
+        assert_eq!(
+            decode_exact_dedup(&payload, input.len() as u64).unwrap(),
+            input
+        );
     }
 }
