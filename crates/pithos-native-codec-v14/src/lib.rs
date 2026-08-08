@@ -595,7 +595,7 @@ mod tests {
         // the later implicit-global-reference transform rather than being an
         // invariant of FastCDC chunk boundaries.
         let text = b"{\"kind\":\"text\"}\n".repeat(32 * 1024);
-        let binary = vec![0, 1, 2, 3].repeat(64 * 1024);
+        let binary = [0, 1, 2, 3].repeat(64 * 1024);
         let shared = b"shared-global-pool-block".repeat(64 * 1024);
 
         let mut input = text.clone();
