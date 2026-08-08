@@ -135,7 +135,7 @@ The lower estimated-entropy stream wins. This is useful when run values themselv
 
 Standalone `.pits` remains fully self-contained. Its side information is limited to cells already encoded inside the same PRS1 payload: exact references and template overlays.
 
-The architecture deliberately leaves external content-addressed side information for Atlas/agent-native deployments. An external-reference mode must be explicit because it changes the decode contract: it cannot silently enter standalone PRS1 archives. The current branch therefore implements the reusable internal mechanism but does not make `.pits` dependent on Atlas.
+The current branch has no dependency on any external storage system. Any future external or cross-archive side-information mode must be an explicit Pithos contract because it changes the decode requirements; it cannot silently enter standalone PRS1 archives. Branch 31 therefore implements and measures only self-contained Pithos-side shared information.
 
 ## Cost planner
 
@@ -165,7 +165,9 @@ The current compatibility selector races complete v17, v12 and PRS1 candidates.
 
 ## Observability
 
-`PITHOS_REP_TRACE=1` records complete representation races and PRS1 cell counts. The R5 runner is expected to retain both family counts and sub-mode counts:
+`PITHOS_REP_TRACE=1` records complete representation races and PRS1 cell counts. R5 separates level-3 prescreen probes from level-15 full ArchiveMax races so sample evidence cannot contaminate final representation decisions.
+
+R5 retains both family counts and sub-mode counts:
 
 - raw;
 - exact reference;
@@ -175,7 +177,15 @@ The current compatibility selector races complete v17, v12 and PRS1 candidates.
 - defect total / periodic defect;
 - transition total / delta transition.
 
+It also records each of the eight physical PRS1 planes with plane id, entropy codec id, raw bytes and encoded bytes. This exposes whether a representation family is useful locally but produces a poor shared physical plane.
+
 This allows each physical-storage inspiration to be kept or removed based on measured wins rather than intuition.
+
+## R5 benchmark scope
+
+R5 is a representation-substrate experiment, so its default critical path runs Pithos `ArchiveMax` only. Balanced is intentionally excluded because it does not enter the PRS1 path. Historical Phase 3 and standalone codec diagnostics remain available as optional diagnostics but are not run before the default R5 representation benchmark.
+
+The comparison remains Pithos-only at execution time: 7-Zip, WinRAR and WinZip executables are not launched. R5 compares against the frozen 7-Zip baseline already committed in the repository.
 
 ## Wire format and compatibility
 
