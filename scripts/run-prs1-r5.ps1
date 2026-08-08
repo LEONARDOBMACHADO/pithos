@@ -23,11 +23,21 @@ $allowedLocal = @(
 function Get-UnexpectedStatus([switch]$AllowCargoLock) {
     $rows = @(& git status --porcelain)
     return @($rows | Where-Object {
-        $path = if ($_.Length -gt 3) { $_.Substring(3).Replace('\\','/') } else { $_ }
+        if ([string]::IsNullOrWhiteSpace($_)) { return $false }
+        $path = if ($_.Length -gt 3) { $_.Substring(3).Replace('\','/') } else { $_ }
         if ($allowedLocal -contains $path) { return $false }
         if ($AllowCargoLock -and $path -eq 'Cargo.lock') { return $false }
         return $true
     })
+}
+
+function Stop-WithLog([string]$Message, [string]$Path) {
+    Write-Host "`n$Message" -ForegroundColor Red
+    if (Test-Path -LiteralPath $Path) {
+        Write-Host "`n===== COMPLETE LOG =====" -ForegroundColor Yellow
+        Get-Content -LiteralPath $Path
+    }
+    throw $Message
 }
 
 $unexpected = @(Get-UnexpectedStatus)
@@ -52,7 +62,7 @@ if (-not $lockHasSubstrate) {
     }
     $status = @(& git status --porcelain)
     $cargoLockChanged = @($status | Where-Object {
-        $_.Length -gt 3 -and $_.Substring(3).Replace('\\','/') -eq 'Cargo.lock'
+        $_.Length -gt 3 -and $_.Substring(3).Replace('\','/') -eq 'Cargo.lock'
     }).Count -eq 1
     if (-not $cargoLockChanged) {
         throw 'Cargo.lock did not change as expected after adding PRS1 workspace crate.'
@@ -65,25 +75,81 @@ if (-not $lockHasSubstrate) {
     exit 23
 }
 
-Write-Host '=== PRS1 R5 STATIC/ROUNDTRIP GATES ===' -ForegroundColor Cyan
+# From this point onward the dependency graph must already be committed and
+# reproducible. --locked prevents Cargo from silently repairing it during gates.
+Write-Host '=== PRS1 R5 LOCKFILE REPRODUCIBILITY ===' -ForegroundColor Cyan
+& cargo metadata --locked --format-version 1 --no-deps | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    throw 'cargo metadata --locked failed; Cargo.lock is stale or inconsistent.'
+}
+
+$gateRoot = if ([string]::IsNullOrWhiteSpace($ExternalEvidenceRoot)) {
+    Join-Path $env:TEMP 'pithos-prs1-r5-gates'
+} else {
+    $ExternalEvidenceRoot
+}
+New-Item -ItemType Directory -Force -Path $gateRoot | Out-Null
+$gateTimestamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
+$clippyMapLog = Join-Path $gateRoot "prs1-r5-clippy-map-$gateTimestamp.log"
+$strictLog = Join-Path $gateRoot "prs1-r5-clippy-strict-$gateTimestamp.log"
+
+Write-Host "`n=== PRS1 R5 STATIC GATE 1/5: RUSTFMT ===" -ForegroundColor Cyan
 & cargo fmt --all -- --check
-if ($LASTEXITCODE -ne 0) { throw 'cargo fmt --check failed' }
+if ($LASTEXITCODE -ne 0) {
+    throw 'cargo fmt --all -- --check failed. Run cargo fmt --all in a dedicated source-fix commit; do not benchmark.'
+}
 
+# Run a complete non-strict workspace Clippy FIRST. This deliberately discovers
+# the full warning surface in one pass so R5 cannot repeat the R4 cycle of fixing
+# one compiler blocker only to reveal the next warning on the following run.
+Write-Host "`n=== PRS1 R5 STATIC GATE 2/5: COMPLETE CLIPPY WARNING MAP ===" -ForegroundColor Cyan
+& cargo clippy --workspace --all-targets 2>&1 | Tee-Object -FilePath $clippyMapLog
+$clippyMapExit = $LASTEXITCODE
+if ($clippyMapExit -ne 0) {
+    Stop-WithLog 'Workspace Clippy map failed to compile. STOP before tests/benchmark.' $clippyMapLog
+}
+
+$warningLines = @(Select-String -LiteralPath $clippyMapLog -Pattern '(^|\s)warning:' -CaseSensitive:$false)
+if ($warningLines.Count -gt 0) {
+    Write-Host "`nDetected $($warningLines.Count) warning line(s)." -ForegroundColor Red
+    Write-Host 'The complete map is printed so all warnings can be repaired in one source pass.' -ForegroundColor Yellow
+    Stop-WithLog 'Workspace is not warning-clean. STOP before strict Clippy/tests/benchmark.' $clippyMapLog
+}
+Write-Host 'COMPLETE CLIPPY WARNING MAP: 0 warnings' -ForegroundColor Green
+
+Write-Host "`n=== PRS1 R5 STATIC GATE 3/5: STRICT CLIPPY ===" -ForegroundColor Cyan
+& cargo clippy --workspace --all-targets -- -D warnings 2>&1 | Tee-Object -FilePath $strictLog
+if ($LASTEXITCODE -ne 0) {
+    Stop-WithLog 'Workspace strict Clippy failed. STOP before tests/benchmark.' $strictLog
+}
+Write-Host 'STRICT CLIPPY PASS' -ForegroundColor Green
+
+Write-Host "`n=== PRS1 R5 STATIC GATE 4/5: TARGETED ROUNDTRIP TESTS ===" -ForegroundColor Cyan
 & cargo test -p pithos-representation-substrate -p pithos-native-codec-v18
-if ($LASTEXITCODE -ne 0) { throw 'PRS1/native-v18 tests failed' }
+if ($LASTEXITCODE -ne 0) {
+    throw 'PRS1/native-v18 tests failed.'
+}
 
-& cargo clippy -p pithos-representation-substrate -p pithos-native-codec-v18 --all-targets -- -D warnings
-if ($LASTEXITCODE -ne 0) { throw 'PRS1/native-v18 strict clippy failed' }
-
-Write-Host "`n=== WORKSPACE REGRESSION GATES ===" -ForegroundColor Cyan
+Write-Host "`n=== PRS1 R5 STATIC GATE 5/5: WORKSPACE REGRESSION + RELEASE ===" -ForegroundColor Cyan
 & cargo test --workspace
-if ($LASTEXITCODE -ne 0) { throw 'workspace tests failed' }
-
-& cargo clippy --workspace --all-targets -- -D warnings
-if ($LASTEXITCODE -ne 0) { throw 'workspace strict clippy failed' }
+if ($LASTEXITCODE -ne 0) {
+    throw 'workspace tests failed.'
+}
 
 & cargo build --release -p pithos-cli
-if ($LASTEXITCODE -ne 0) { throw 'release CLI build failed' }
+if ($LASTEXITCODE -ne 0) {
+    throw 'release CLI build failed.'
+}
+
+& git diff --check
+if ($LASTEXITCODE -ne 0) {
+    throw 'git diff --check failed after gates.'
+}
+
+$shaAfterGates = (& git rev-parse HEAD).Trim()
+if ($shaAfterGates -ne $sha) {
+    throw "HEAD changed while gates were running. before=$sha after=$shaAfterGates"
+}
 
 $unexpected = @(Get-UnexpectedStatus)
 if ($unexpected.Count -gt 0) {
@@ -91,6 +157,16 @@ if ($unexpected.Count -gt 0) {
     $unexpected | ForEach-Object { Write-Host $_ }
     throw 'STOP before benchmark. Return status; do not repair source manually.'
 }
+
+Write-Host "`n=== PRS1 R5 PRE-BENCHMARK CONTRACT PASS ===" -ForegroundColor Green
+Write-Host "source_commit=$sha"
+Write-Host 'fmt=PASS'
+Write-Host 'clippy_warning_map=0'
+Write-Host 'strict_clippy=PASS'
+Write-Host 'targeted_tests=PASS'
+Write-Host 'workspace_tests=PASS'
+Write-Host 'release_build=PASS'
+Write-Host 'git_diff_check=PASS'
 
 $traceRoot = if ([string]::IsNullOrWhiteSpace($ExternalEvidenceRoot)) {
     Join-Path $env:TEMP 'pithos-prs1-r5'
