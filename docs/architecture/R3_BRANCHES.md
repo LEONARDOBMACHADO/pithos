@@ -1,0 +1,1 @@
+23 compact references; 24 parallel read; 25 global canonical pool; 26 motif codebook; 27 seeded references; 28 quaternary context; 29 global planner.
