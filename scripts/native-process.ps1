@@ -2,6 +2,12 @@
 
 Set-StrictMode -Version Latest
 
+$sourceMapValidator = Join-Path $PSScriptRoot 'validate-powershell-source-map.ps1'
+if (-not (Test-Path -LiteralPath $sourceMapValidator -PathType Leaf)) {
+    throw "PowerShell source-map validator not found: $sourceMapValidator"
+}
+& $sourceMapValidator
+
 function Invoke-PithosNativeProcess {
     [CmdletBinding()]
     param(
