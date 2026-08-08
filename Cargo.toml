@@ -37,6 +37,7 @@ members = [
     "crates/pithos-bench",
     "crates/pithos-viewer",
     "crates/pithos-mount",
+    "crates/pithos-representation-profiler",
 ]
 
 [workspace.package]
