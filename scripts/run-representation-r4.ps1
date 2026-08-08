@@ -19,9 +19,7 @@ $combinedBaseline = Import-Csv -LiteralPath $baselinePath | Where-Object { $_.ca
 if ($null -eq $combinedBaseline) { throw 'combined-all row missing from frozen 7-Zip baseline.' }
 
 $pithosExe = Join-Path $repoPath 'target\release\pithos.exe'
-$profilerExe = Join-Path $repoPath 'target\release\pithos-representation-profiler.exe'
 if (-not (Test-Path -LiteralPath $pithosExe -PathType Leaf)) { throw "Pithos release binary not found: $pithosExe" }
-if (-not (Test-Path -LiteralPath $profilerExe -PathType Leaf)) { throw "Representation profiler release binary not found: $profilerExe" }
 
 $timestamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
 $branch = (& git branch --show-current).Trim()
@@ -72,6 +70,7 @@ try {
             [Parameter(Mandatory=$true)][string]$Label,
             [Parameter(Mandatory=$true)][string]$LogPath
         )
+        $code = 0
         $watch = [System.Diagnostics.Stopwatch]::StartNew()
         try {
             & $Exe @Arguments 2>&1 | Tee-Object -FilePath $LogPath -Append | ForEach-Object { Write-Host $_ }
@@ -93,16 +92,8 @@ try {
     Copy-Item -LiteralPath $baselinePath -Destination (Join-Path $evidenceDir '7zip-best-baseline.csv') -Force
 
     Write-Host ''
-    Write-Host '=== Native representation profiler: v12/v14/v15/v16/v17 ===' -ForegroundColor Cyan
-    $profileCsv = Join-Path $evidenceDir 'representation-profile.csv'
-    $profileLog = Join-Path $evidenceDir 'representation-profile.log'
-    & $profilerExe $inputPath $profileCsv '12,14,15,16,17' 2>&1 |
-        Tee-Object -FilePath $profileLog |
-        ForEach-Object { Write-Host $_ }
-    if ($LASTEXITCODE -ne 0) { throw "representation profiler failed with exit code $LASTEXITCODE" }
-
-    Write-Host ''
-    Write-Host '=== Full ArchiveMax planner: Pithos only ===' -ForegroundColor Cyan
+    Write-Host '=== Full ArchiveMax representation trace: Pithos only ===' -ForegroundColor Cyan
+    Write-Host 'Trace includes ClassAware vs Global and v17 vs historical v12 floor per native call.' -ForegroundColor Cyan
     $plannerLog = Join-Path $evidenceDir 'planner-trace.log'
     $previousTrace = $env:PITHOS_REP_TRACE
     $env:PITHOS_REP_TRACE = '1'
@@ -129,6 +120,12 @@ try {
     $baselineVerifyMs = [double]::Parse($combinedBaseline.verify_ms, [System.Globalization.CultureInfo]::InvariantCulture)
     $baselineDecompressMs = [double]::Parse($combinedBaseline.decompress_ms, [System.Globalization.CultureInfo]::InvariantCulture)
 
+    $traceLines = @(Get-Content -LiteralPath $plannerLog | Where-Object { $_ -like '*PITHOS_REP_TRACE*' })
+    $nativeRaceLines = @($traceLines | Where-Object { $_ -like '*stage=native_floor_race*' })
+    $archiveCandidateLines = @($traceLines | Where-Object { $_ -like '*stage=archive_candidate*' })
+    $winnerLines = @($traceLines | Where-Object { $_ -like '*stage=archive_winner*' })
+    $traceLines | Set-Content -LiteralPath (Join-Path $evidenceDir 'representation-trace-only.log') -Encoding UTF8
+
     $result = [pscustomobject]@{
         branch = $branch
         commit = $sha
@@ -139,6 +136,9 @@ try {
         verify_ms = $verifyMs
         decompress_ms = $decompressMs
         tree_sha256 = $actualDigest
+        native_floor_races = $nativeRaceLines.Count
+        archive_candidate_records = $archiveCandidateLines.Count
+        archive_winner_records = $winnerLines.Count
         sevenzip_best_archive_bytes = $baselineBytes
         delta_bytes_vs_7zip_best = $archiveBytes - $baselineBytes
         sevenzip_best_compress_ms = $baselineCompressMs
@@ -164,12 +164,15 @@ try {
         "pithos_compress_ms=$compressMs",
         "pithos_verify_ms=$verifyMs",
         "pithos_decompress_ms=$decompressMs",
+        "native_floor_races=$($nativeRaceLines.Count)",
+        "archive_candidate_records=$($archiveCandidateLines.Count)",
+        "archive_winner_records=$($winnerLines.Count)",
         "7zip_frozen_archive_bytes=$baselineBytes",
         "7zip_frozen_compress_ms=$baselineCompressMs",
         "7zip_frozen_verify_ms=$baselineVerifyMs",
         "7zip_frozen_decompress_ms=$baselineDecompressMs",
         "delta_bytes_vs_7zip_best=$($archiveBytes - $baselineBytes)",
-        "7zip_executed=False",
+        '7zip_executed=False',
         "tree_sha256=$actualDigest",
         'status=PASS'
     ) | Set-Content -LiteralPath (Join-Path $evidenceDir 'R4_RESULT.txt') -Encoding UTF8
@@ -180,10 +183,10 @@ try {
     }
 
     Write-Host ''
-    Write-Host 'R4 representation profile PASS' -ForegroundColor Green
+    Write-Host 'R4 representation trace PASS' -ForegroundColor Green
     $result | Format-List | Out-String | Write-Host
-    Write-Host 'Native representation results:' -ForegroundColor Green
-    Import-Csv -LiteralPath $profileCsv | Format-Table -AutoSize | Out-String | Write-Host
+    Write-Host 'Representation trace:' -ForegroundColor Green
+    $traceLines | ForEach-Object { Write-Host $_ }
     Write-Host "Evidence: $evidenceDir"
     exit 0
 }
