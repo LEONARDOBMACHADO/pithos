@@ -15,6 +15,7 @@ mod direct_pack;
 mod native_archive;
 mod native_pack;
 mod native_verify;
+mod parallel_archive;
 mod prescreen_pack;
 
 pub use compat_dispatch::{
