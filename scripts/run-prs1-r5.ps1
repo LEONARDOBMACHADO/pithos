@@ -239,10 +239,13 @@ if ($null -eq $evidence) { throw 'Frozen-baseline evidence directory not found.'
 Copy-Item -LiteralPath $tracePath -Destination (Join-Path $evidence.FullName 'prs1-representation-trace.log') -Force
 
 function Parse-TraceLine([string]$Line) {
-    if ($Line -notlike 'PITHOS_REP_TRACE*') { return $null }
+    $marker = 'PITHOS_REP_TRACE'
+    $markerIndex = $Line.IndexOf($marker, [System.StringComparison]::Ordinal)
+    if ($markerIndex -lt 0) { return $null }
+    $trace = $Line.Substring($markerIndex)
     $map = [ordered]@{}
-    foreach ($part in ($Line -split "`t")) {
-        if ($part -eq 'PITHOS_REP_TRACE') { continue }
+    foreach ($part in ($trace -split "`t")) {
+        if ($part -eq $marker) { continue }
         $pair = $part -split '=', 2
         if ($pair.Count -eq 2) { $map[$pair[0]] = $pair[1] }
     }
@@ -260,12 +263,15 @@ $traceRows | Export-Csv -LiteralPath (Join-Path $evidence.FullName 'prs1-trace.c
 
 $allRaceRows = @($traceRows | Where-Object { $_.stage -eq 'representation_race' })
 $allSummaryRows = @($traceRows | Where-Object { $_.stage -eq 'prs1_summary' })
+$allPlaneRows = @($traceRows | Where-Object { $_.stage -eq 'prs1_plane' })
 $probeRaceRows = @($allRaceRows | Where-Object { $_.level -eq '3' })
 $probeSummaryRows = @($allSummaryRows | Where-Object { $_.level -eq '3' })
+$probePlaneRows = @($allPlaneRows | Where-Object { $_.level -eq '3' })
 $raceRows = @($allRaceRows | Where-Object { $_.level -eq '15' })
 $summaryRows = @($allSummaryRows | Where-Object { $_.level -eq '15' })
+$planeRows = @($allPlaneRows | Where-Object { $_.level -eq '15' })
 $unexpectedLevels = @(
-    $allRaceRows + $allSummaryRows |
+    $allRaceRows + $allSummaryRows + $allPlaneRows |
         Where-Object { $_.level -notin @('3','15') }
 )
 if ($unexpectedLevels.Count -gt 0) {
@@ -278,6 +284,33 @@ if ($raceRows.Count -eq 0) {
 if ($summaryRows.Count -eq 0) {
     throw 'No full ArchiveMax prs1_summary rows (level=15) captured.'
 }
+$expectedPlaneRows = $summaryRows.Count * 8
+if ($planeRows.Count -ne $expectedPlaneRows) {
+    throw "Physical PRS1 plane evidence incomplete: actual=$($planeRows.Count) expected=$expectedPlaneRows"
+}
+$planeRows | Export-Csv -LiteralPath (Join-Path $evidence.FullName 'prs1-plane-trace.csv') -NoTypeInformation -Encoding UTF8
+
+$planeSummary = @(
+    $planeRows |
+        Group-Object plane |
+        Sort-Object { [int]$_.Name } |
+        ForEach-Object {
+            $group = @($_.Group)
+            $rawBytes = [int64](($group | ForEach-Object { [int64]$_.raw_bytes } | Measure-Object -Sum).Sum)
+            $encodedBytes = [int64](($group | ForEach-Object { [int64]$_.encoded_bytes } | Measure-Object -Sum).Sum)
+            [pscustomobject]@{
+                plane = [int]$_.Name
+                records = $group.Count
+                raw_bytes = $rawBytes
+                encoded_bytes = $encodedBytes
+                savings_bytes = $rawBytes - $encodedBytes
+                store_records = @($group | Where-Object { $_.codec_id -eq '0' }).Count
+                zstd_records = @($group | Where-Object { $_.codec_id -eq '1' }).Count
+                lzma2_records = @($group | Where-Object { $_.codec_id -eq '3' }).Count
+            }
+        }
+)
+$planeSummary | Export-Csv -LiteralPath (Join-Path $evidence.FullName 'prs1-plane-summary.csv') -NoTypeInformation -Encoding UTF8
 
 $prs1Wins = @($raceRows | Where-Object { $_.winner -eq 'prs1' }).Count
 $v12Wins = @($raceRows | Where-Object { $_.winner -eq 'v12' }).Count
@@ -290,6 +323,8 @@ $sum = {
     param([string]$Property)
     [int64](($summaryRows | ForEach-Object { if ($_.$Property) { [int64]$_.$Property } else { 0 } } | Measure-Object -Sum).Sum)
 }
+$planeRawTotal = [int64](($planeRows | ForEach-Object { [int64]$_.raw_bytes } | Measure-Object -Sum).Sum)
+$planeEncodedTotal = [int64](($planeRows | ForEach-Object { [int64]$_.encoded_bytes } | Measure-Object -Sum).Sum)
 $summaryPath = Join-Path $evidence.FullName 'PRS1_R5_SUMMARY.txt'
 @(
     "timestamp_utc=$((Get-Date).ToUniversalTime().ToString('o'))",
@@ -303,11 +338,18 @@ $summaryPath = Join-Path $evidence.FullName 'PRS1_R5_SUMMARY.txt'
     "v12_wins=$v12Wins",
     "v17_wins=$v17Wins",
     "prs1_candidate_summaries=$($summaryRows.Count)",
+    "physical_plane_records=$($planeRows.Count)",
+    "physical_plane_raw_bytes=$planeRawTotal",
+    "physical_plane_encoded_bytes=$planeEncodedTotal",
+    "physical_plane_store_records=$(@($planeRows | Where-Object { $_.codec_id -eq '0' }).Count)",
+    "physical_plane_zstd_records=$(@($planeRows | Where-Object { $_.codec_id -eq '1' }).Count)",
+    "physical_plane_lzma2_records=$(@($planeRows | Where-Object { $_.codec_id -eq '3' }).Count)",
     "probe_representation_races=$($probeRaceRows.Count)",
     "probe_prs1_wins=$probePrs1Wins",
     "probe_v12_wins=$probeV12Wins",
     "probe_v17_wins=$probeV17Wins",
     "probe_candidate_summaries=$($probeSummaryRows.Count)",
+    "probe_plane_records=$($probePlaneRows.Count)",
     "raw_cells=$(& $sum 'raw')",
     "exact_ref_cells=$(& $sum 'exact_ref')",
     "overlay_cells=$(& $sum 'overlay')",
@@ -328,6 +370,7 @@ $summaryPath = Join-Path $evidence.FullName 'PRS1_R5_SUMMARY.txt'
 
 Write-Host "`n=== PRS1 R5 RESULT ===" -ForegroundColor Green
 Get-Content -LiteralPath $summaryPath | ForEach-Object { Write-Host $_ }
+Write-Host "Physical plane summary: $(Join-Path $evidence.FullName 'prs1-plane-summary.csv')"
 Write-Host "Evidence: $($evidence.FullName)"
 Write-Host "Trace: $tracePath"
 exit 0
