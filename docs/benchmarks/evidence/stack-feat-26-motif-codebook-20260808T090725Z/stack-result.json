@@ -1,0 +1,30 @@
+﻿[
+    {
+        "branch":  "feat/26-motif-codebook",
+        "commit":  "6731d6539cca665d18e240f6505930bd779fdea8",
+        "compressor":  "pithos",
+        "profile":  "archive-max",
+        "original_bytes":  499318122,
+        "archive_bytes":  86153416,
+        "savings_percent":  82.745786,
+        "compress_ms":  676034.141,
+        "verify_ms":  6503.836,
+        "decompress_ms":  8775.481,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    },
+    {
+        "branch":  "feat/26-motif-codebook",
+        "commit":  "6731d6539cca665d18e240f6505930bd779fdea8",
+        "compressor":  "7zip",
+        "profile":  "lzma2-mx9-solid",
+        "original_bytes":  499318122,
+        "archive_bytes":  86352021,
+        "savings_percent":  82.706011,
+        "compress_ms":  82214.211,
+        "verify_ms":  3991.007,
+        "decompress_ms":  4426.916,
+        "tree_sha256":  "469c4840101776c6f00738c6457f5ea99bab0f9b65cf84544d695c66b54169b4",
+        "status":  "ok"
+    }
+]

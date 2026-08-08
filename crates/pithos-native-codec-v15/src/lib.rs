@@ -223,7 +223,9 @@ fn decode_motifs(
             let end = cursor
                 .checked_add(length)
                 .ok_or(PithosError::IntegerOverflow)?;
-            let bytes = transformed.get(cursor..end).ok_or(PithosError::InvalidRange)?;
+            let bytes = transformed
+                .get(cursor..end)
+                .ok_or(PithosError::InvalidRange)?;
             if output.len().saturating_add(bytes.len()) > expected {
                 return Err(PithosError::ResourceLimit("native motif output"));
             }
@@ -274,9 +276,7 @@ fn read_varint(bytes: &[u8], cursor: &mut usize) -> Result<u64> {
     let mut shift = 0_u32;
     for _ in 0..10 {
         let byte = *bytes.get(*cursor).ok_or(PithosError::InvalidRange)?;
-        *cursor = cursor
-            .checked_add(1)
-            .ok_or(PithosError::IntegerOverflow)?;
+        *cursor = cursor.checked_add(1).ok_or(PithosError::IntegerOverflow)?;
         value |= u64::from(byte & 0x7f) << shift;
         if byte & 0x80 == 0 {
             return Ok(value);
@@ -287,12 +287,16 @@ fn read_varint(bytes: &[u8], cursor: &mut usize) -> Result<u64> {
 }
 
 fn read_u16(bytes: &[u8], offset: usize) -> Result<u16> {
-    let slice = bytes.get(offset..offset + 2).ok_or(PithosError::InvalidRange)?;
+    let slice = bytes
+        .get(offset..offset + 2)
+        .ok_or(PithosError::InvalidRange)?;
     Ok(u16::from_le_bytes([slice[0], slice[1]]))
 }
 
 fn read_u64(bytes: &[u8], offset: usize) -> Result<u64> {
-    let slice = bytes.get(offset..offset + 8).ok_or(PithosError::InvalidRange)?;
+    let slice = bytes
+        .get(offset..offset + 8)
+        .ok_or(PithosError::InvalidRange)?;
     Ok(u64::from_le_bytes([
         slice[0], slice[1], slice[2], slice[3], slice[4], slice[5], slice[6], slice[7],
     ]))
@@ -308,7 +312,10 @@ mod tests {
         let input = b"xxABCDEFGHyyABCDEFGHzz";
         let encoded = encode_motifs(input, &dictionary);
         assert!(encoded.len() < input.len());
-        assert_eq!(decode_motifs(&encoded, &dictionary, input.len() as u64).unwrap(), input);
+        assert_eq!(
+            decode_motifs(&encoded, &dictionary, input.len() as u64).unwrap(),
+            input
+        );
     }
 
     #[test]
@@ -316,6 +323,9 @@ mod tests {
         let input = b"ABCDEFGH".repeat(256 * 1024);
         let lengths = [input.len() as u64];
         let (payload, _) = encode_exact_dedup(&input, &lengths, 15).unwrap();
-        assert_eq!(decode_exact_dedup(&payload, input.len() as u64).unwrap(), input);
+        assert_eq!(
+            decode_exact_dedup(&payload, input.len() as u64).unwrap(),
+            input
+        );
     }
 }
