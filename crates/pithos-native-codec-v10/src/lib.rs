@@ -57,7 +57,10 @@ pub fn encode_exact_dedup(
 
     let mut clusters = BTreeMap::<Class, Vec<Member<'_>>>::new();
     for member in members {
-        clusters.entry(classify(member.bytes)).or_default().push(member);
+        clusters
+            .entry(classify(member.bytes))
+            .or_default()
+            .push(member);
     }
     if clusters.len() <= 1 || clusters.len() > MAX_CLUSTERS {
         return Ok((baseline, from_v9(baseline_stats)));
@@ -81,10 +84,18 @@ pub fn encode_exact_dedup(
         let (payload, stats) =
             pithos_native_v9::encode_exact_dedup(&cluster_bytes, &lengths, level)?;
         total_stats.chunk_count = total_stats.chunk_count.saturating_add(stats.chunk_count);
-        total_stats.canonical_chunks = total_stats.canonical_chunks.saturating_add(stats.canonical_chunks);
-        total_stats.gross_duplicate_bytes = total_stats.gross_duplicate_bytes.saturating_add(stats.gross_duplicate_bytes);
-        total_stats.representation_bytes = total_stats.representation_bytes.saturating_add(stats.representation_bytes);
-        total_stats.encoded_bytes = total_stats.encoded_bytes.saturating_add(stats.encoded_bytes);
+        total_stats.canonical_chunks = total_stats
+            .canonical_chunks
+            .saturating_add(stats.canonical_chunks);
+        total_stats.gross_duplicate_bytes = total_stats
+            .gross_duplicate_bytes
+            .saturating_add(stats.gross_duplicate_bytes);
+        total_stats.representation_bytes = total_stats
+            .representation_bytes
+            .saturating_add(stats.representation_bytes);
+        total_stats.encoded_bytes = total_stats
+            .encoded_bytes
+            .saturating_add(stats.encoded_bytes);
         encoded_clusters.push((class, members, cluster_bytes.len() as u64, payload));
     }
 
@@ -112,7 +123,9 @@ pub fn encode_exact_dedup(
     }
     let nested_encoded_bytes = total_stats.encoded_bytes;
     let envelope_overhead = (candidate.len() as u64).saturating_sub(nested_encoded_bytes);
-    total_stats.representation_bytes = total_stats.representation_bytes.saturating_add(envelope_overhead);
+    total_stats.representation_bytes = total_stats
+        .representation_bytes
+        .saturating_add(envelope_overhead);
     total_stats.encoded_bytes = candidate.len() as u64;
     Ok((candidate, total_stats))
 }
@@ -153,14 +166,20 @@ pub fn decode_exact_dedup(payload: &[u8], expected_len: u64) -> Result<Vec<u8>> 
             position += 4;
             let length = read_u64(payload, position)?;
             position += 8;
-            declared_cluster_len = declared_cluster_len.checked_add(length).ok_or(PithosError::IntegerOverflow)?;
+            declared_cluster_len = declared_cluster_len
+                .checked_add(length)
+                .ok_or(PithosError::IntegerOverflow)?;
             members.push((index, length));
         }
         if declared_cluster_len != cluster_len {
             return Err(PithosError::InvalidMetadata("cluster length"));
         }
-        let end = position.checked_add(payload_len).ok_or(PithosError::IntegerOverflow)?;
-        let encoded = payload.get(position..end).ok_or(PithosError::InvalidRange)?;
+        let end = position
+            .checked_add(payload_len)
+            .ok_or(PithosError::IntegerOverflow)?;
+        let encoded = payload
+            .get(position..end)
+            .ok_or(PithosError::InvalidRange)?;
         let decoded = pithos_native_v9::decode_exact_dedup(encoded, cluster_len)?;
         position = end;
         let mut cursor = 0_usize;
@@ -169,8 +188,15 @@ pub fn decode_exact_dedup(payload: &[u8], expected_len: u64) -> Result<Vec<u8>> 
                 return Err(PithosError::InvalidMetadata("cluster member index"));
             }
             let length = usize::try_from(length).map_err(|_| PithosError::IntegerOverflow)?;
-            let member_end = cursor.checked_add(length).ok_or(PithosError::IntegerOverflow)?;
-            restored[index] = Some(decoded.get(cursor..member_end).ok_or(PithosError::InvalidRange)?.to_vec());
+            let member_end = cursor
+                .checked_add(length)
+                .ok_or(PithosError::IntegerOverflow)?;
+            restored[index] = Some(
+                decoded
+                    .get(cursor..member_end)
+                    .ok_or(PithosError::InvalidRange)?
+                    .to_vec(),
+            );
             cursor = member_end;
         }
         if cursor != decoded.len() {
@@ -180,7 +206,8 @@ pub fn decode_exact_dedup(payload: &[u8], expected_len: u64) -> Result<Vec<u8>> 
     if position != payload.len() {
         return Err(PithosError::InvalidMetadata("cluster trailing bytes"));
     }
-    let mut output = Vec::with_capacity(usize::try_from(expected_len).map_err(|_| PithosError::MemoryLimit)?);
+    let mut output =
+        Vec::with_capacity(usize::try_from(expected_len).map_err(|_| PithosError::MemoryLimit)?);
     for member in restored {
         let member = member.ok_or(PithosError::InvalidMetadata("missing clustered member"))?;
         output.extend_from_slice(&member);
@@ -199,7 +226,9 @@ fn split_members<'a>(input: &'a [u8], lengths: &[u64]) -> Result<Vec<Member<'a>>
     let mut offset = 0_usize;
     for (index, length) in lengths.iter().enumerate() {
         let length = usize::try_from(*length).map_err(|_| PithosError::IntegerOverflow)?;
-        let end = offset.checked_add(length).ok_or(PithosError::IntegerOverflow)?;
+        let end = offset
+            .checked_add(length)
+            .ok_or(PithosError::IntegerOverflow)?;
         members.push(Member {
             index: u32::try_from(index).map_err(|_| PithosError::IntegerOverflow)?,
             bytes: input.get(offset..end).ok_or(PithosError::InvalidRange)?,
@@ -240,12 +269,19 @@ fn classify(bytes: &[u8]) -> Class {
         return Class::Database;
     }
     if let Ok(text) = std::str::from_utf8(bytes) {
-        let first = text.as_bytes().iter().copied().find(|byte| !byte.is_ascii_whitespace());
+        let first = text
+            .as_bytes()
+            .iter()
+            .copied()
+            .find(|byte| !byte.is_ascii_whitespace());
         if matches!(first, Some(b'{') | Some(b'[') | Some(b'<')) {
             return Class::StructuredText;
         }
         let sample = &text.as_bytes()[..text.len().min(256 * 1024)];
-        let printable = sample.iter().filter(|byte| byte.is_ascii_graphic() || byte.is_ascii_whitespace()).count();
+        let printable = sample
+            .iter()
+            .filter(|byte| byte.is_ascii_graphic() || byte.is_ascii_whitespace())
+            .count();
         if sample.is_empty() || printable.saturating_mul(100) >= sample.len().saturating_mul(90) {
             return Class::Text;
         }
@@ -264,16 +300,24 @@ fn from_v9(stats: pithos_native_v9::NativeStats) -> NativeStats {
 }
 
 fn read_u16(bytes: &[u8], offset: usize) -> Result<u16> {
-    let data = bytes.get(offset..offset + 2).ok_or(PithosError::InvalidRange)?;
+    let data = bytes
+        .get(offset..offset + 2)
+        .ok_or(PithosError::InvalidRange)?;
     Ok(u16::from_le_bytes([data[0], data[1]]))
 }
 fn read_u32(bytes: &[u8], offset: usize) -> Result<u32> {
-    let data = bytes.get(offset..offset + 4).ok_or(PithosError::InvalidRange)?;
+    let data = bytes
+        .get(offset..offset + 4)
+        .ok_or(PithosError::InvalidRange)?;
     Ok(u32::from_le_bytes([data[0], data[1], data[2], data[3]]))
 }
 fn read_u64(bytes: &[u8], offset: usize) -> Result<u64> {
-    let data = bytes.get(offset..offset + 8).ok_or(PithosError::InvalidRange)?;
-    Ok(u64::from_le_bytes([data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7]]))
+    let data = bytes
+        .get(offset..offset + 8)
+        .ok_or(PithosError::InvalidRange)?;
+    Ok(u64::from_le_bytes([
+        data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+    ]))
 }
 
 #[cfg(test)]
@@ -282,11 +326,16 @@ mod tests {
     #[test]
     fn clustered_members_restore_original_order() {
         let text = b"{ \"a\": 1, \"b\": 2 }\n".repeat(20_000);
-        let binary = (0..700_000).map(|index| ((index * 181 + 7) % 256) as u8).collect::<Vec<_>>();
+        let binary = (0..700_000)
+            .map(|index| ((index * 181 + 7) % 256) as u8)
+            .collect::<Vec<_>>();
         let mut input = binary.clone();
         input.extend_from_slice(&text);
         let lengths = [binary.len() as u64, text.len() as u64];
         let (encoded, _) = encode_exact_dedup(&input, &lengths, 5).unwrap();
-        assert_eq!(decode_exact_dedup(&encoded, input.len() as u64).unwrap(), input);
+        assert_eq!(
+            decode_exact_dedup(&encoded, input.len() as u64).unwrap(),
+            input
+        );
     }
 }

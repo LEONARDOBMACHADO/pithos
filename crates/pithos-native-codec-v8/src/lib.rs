@@ -1,43 +1,537 @@
 //! Native codec v8: nested DEFLATE modelling for conservative ZIP/Office and PDF streams.
 
-use flate2::{Compression, read::{DeflateDecoder, ZlibDecoder}, write::{DeflateEncoder, ZlibEncoder}};
+use flate2::{
+    Compression,
+    read::{DeflateDecoder, ZlibDecoder},
+    write::{DeflateEncoder, ZlibEncoder},
+};
 use pithos_core::{PithosError, Result};
 use std::io::{Cursor, Read, Write};
 
-pub const NATIVE_CODEC_ID:u16=pithos_native_v7::NATIVE_CODEC_ID;
-pub const NATIVE_CODEC_VERSION:u16=pithos_native_v7::NATIVE_CODEC_VERSION;
-const MAGIC:&[u8;4]=b"PDF8";const HEADER_LEN:usize=40;const MAX_INFLATED:usize=1024*1024*1024;
-#[derive(Debug,Clone,Copy,PartialEq,Eq)]pub struct NativeStats{pub chunk_count:u32,pub canonical_chunks:u32,pub gross_duplicate_bytes:u64,pub representation_bytes:u64,pub encoded_bytes:u64}
-#[derive(Debug,Clone,Copy)]enum Kind{Deflate=1,Zlib=2}
-#[derive(Debug)]struct Delta{prefix:u32,suffix:u32,original_len:u32,middle:Vec<u8>}
-#[derive(Debug)]struct StreamMeta{kind:Kind,decoded_len:u64,delta:Delta}
-#[derive(Debug)]enum Member{Raw{len:u64},Nested{transformed_len:u64,prefix:Vec<u8>,gaps:Vec<Vec<u8>>,streams:Vec<StreamMeta>}}
+pub const NATIVE_CODEC_ID: u16 = pithos_native_v7::NATIVE_CODEC_ID;
+pub const NATIVE_CODEC_VERSION: u16 = pithos_native_v7::NATIVE_CODEC_VERSION;
+const MAGIC: &[u8; 4] = b"PDF8";
+const HEADER_LEN: usize = 40;
+const MAX_INFLATED: usize = 1024 * 1024 * 1024;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativeStats {
+    pub chunk_count: u32,
+    pub canonical_chunks: u32,
+    pub gross_duplicate_bytes: u64,
+    pub representation_bytes: u64,
+    pub encoded_bytes: u64,
+}
+#[derive(Debug, Clone, Copy)]
+enum Kind {
+    Deflate = 1,
+    Zlib = 2,
+}
+#[derive(Debug)]
+struct Delta {
+    prefix: u32,
+    suffix: u32,
+    original_len: u32,
+    middle: Vec<u8>,
+}
+#[derive(Debug)]
+struct StreamMeta {
+    kind: Kind,
+    decoded_len: u64,
+    delta: Delta,
+}
+#[derive(Debug)]
+enum Member {
+    Raw {
+        len: u64,
+    },
+    Nested {
+        transformed_len: u64,
+        prefix: Vec<u8>,
+        gaps: Vec<Vec<u8>>,
+        streams: Vec<StreamMeta>,
+    },
+}
 
-pub fn encode_exact_dedup(input:&[u8],members:&[u64],level:i32)->Result<(Vec<u8>,NativeStats)>{
- let(baseline,bs)=pithos_native_v7::encode_exact_dedup(input,members,level)?;let baseline_len=baseline.len()as u64;let mut transformed=Vec::new();let mut lengths=Vec::new();let mut models=Vec::new();let mut pos=0usize;let mut any=false;
- for &len in members{let end=pos.checked_add(len as usize).ok_or(PithosError::IntegerOverflow)?;let member=input.get(pos..end).ok_or(PithosError::InvalidRange)?;match model_member(member)?{Some((bytes,model))=>{any=true;lengths.push(bytes.len()as u64);transformed.extend_from_slice(&bytes);models.push(model);},None=>{lengths.push(len);transformed.extend_from_slice(member);models.push(Member::Raw{len});}}pos=end;}
- if !any{return Ok((baseline,convert(bs,baseline_len)));}
- let(nested,ns)=pithos_native_v7::encode_exact_dedup(&transformed,&lengths,level)?;let metadata=zstd::stream::encode_all(Cursor::new(encode_models(&models)?),3)?;let mut candidate=Vec::with_capacity(HEADER_LEN+metadata.len()+nested.len());candidate.extend_from_slice(MAGIC);candidate.extend_from_slice(&8u16.to_le_bytes());candidate.extend_from_slice(&0u16.to_le_bytes());candidate.extend_from_slice(&(input.len()as u64).to_le_bytes());candidate.extend_from_slice(&(transformed.len()as u64).to_le_bytes());candidate.extend_from_slice(&(models.len()as u32).to_le_bytes());candidate.extend_from_slice(&(metadata.len()as u32).to_le_bytes());candidate.extend_from_slice(&(nested.len()as u64).to_le_bytes());candidate.extend_from_slice(&metadata);candidate.extend_from_slice(&nested);if candidate.len()>=baseline.len(){return Ok((baseline,convert(bs,baseline_len)));}Ok((candidate,NativeStats{chunk_count:ns.chunk_count,canonical_chunks:ns.canonical_chunks,gross_duplicate_bytes:ns.gross_duplicate_bytes,representation_bytes:ns.representation_bytes+metadata.len()as u64,encoded_bytes:(HEADER_LEN+metadata.len()+nested.len())as u64}))}
+pub fn encode_exact_dedup(
+    input: &[u8],
+    members: &[u64],
+    level: i32,
+) -> Result<(Vec<u8>, NativeStats)> {
+    let (baseline, bs) = pithos_native_v7::encode_exact_dedup(input, members, level)?;
+    let baseline_len = baseline.len() as u64;
+    let mut transformed = Vec::new();
+    let mut lengths = Vec::new();
+    let mut models = Vec::new();
+    let mut pos = 0usize;
+    let mut any = false;
+    for &len in members {
+        let end = pos
+            .checked_add(len as usize)
+            .ok_or(PithosError::IntegerOverflow)?;
+        let member = input.get(pos..end).ok_or(PithosError::InvalidRange)?;
+        match model_member(member)? {
+            Some((bytes, model)) => {
+                any = true;
+                lengths.push(bytes.len() as u64);
+                transformed.extend_from_slice(&bytes);
+                models.push(model);
+            }
+            None => {
+                lengths.push(len);
+                transformed.extend_from_slice(member);
+                models.push(Member::Raw { len });
+            }
+        }
+        pos = end;
+    }
+    if !any {
+        return Ok((baseline, convert(bs, baseline_len)));
+    }
+    let (nested, ns) = pithos_native_v7::encode_exact_dedup(&transformed, &lengths, level)?;
+    let metadata = zstd::stream::encode_all(Cursor::new(encode_models(&models)?), 3)?;
+    let mut candidate = Vec::with_capacity(HEADER_LEN + metadata.len() + nested.len());
+    candidate.extend_from_slice(MAGIC);
+    candidate.extend_from_slice(&8u16.to_le_bytes());
+    candidate.extend_from_slice(&0u16.to_le_bytes());
+    candidate.extend_from_slice(&(input.len() as u64).to_le_bytes());
+    candidate.extend_from_slice(&(transformed.len() as u64).to_le_bytes());
+    candidate.extend_from_slice(&(models.len() as u32).to_le_bytes());
+    candidate.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
+    candidate.extend_from_slice(&(nested.len() as u64).to_le_bytes());
+    candidate.extend_from_slice(&metadata);
+    candidate.extend_from_slice(&nested);
+    if candidate.len() >= baseline.len() {
+        return Ok((baseline, convert(bs, baseline_len)));
+    }
+    Ok((
+        candidate,
+        NativeStats {
+            chunk_count: ns.chunk_count,
+            canonical_chunks: ns.canonical_chunks,
+            gross_duplicate_bytes: ns.gross_duplicate_bytes,
+            representation_bytes: ns.representation_bytes + metadata.len() as u64,
+            encoded_bytes: (HEADER_LEN + metadata.len() + nested.len()) as u64,
+        },
+    ))
+}
 
-pub fn decode_exact_dedup(payload:&[u8],expected:u64)->Result<Vec<u8>>{if payload.len()<HEADER_LEN||&payload[..4]!=MAGIC{return pithos_native_v7::decode_exact_dedup(payload,expected);}if read_u16(payload,4)?!=8||read_u64(payload,8)?!=expected{return Err(PithosError::InvalidMetadata("nested deflate header"));}let transformed_len=read_u64(payload,16)?;let count=read_u32(payload,24)?as usize;let ml=read_u32(payload,28)?as usize;let nl=read_u64(payload,32)?as usize;let me=HEADER_LEN.checked_add(ml).ok_or(PithosError::IntegerOverflow)?;let ne=me.checked_add(nl).ok_or(PithosError::IntegerOverflow)?;if ne!=payload.len(){return Err(PithosError::InvalidRange);}let meta=zstd::stream::decode_all(Cursor::new(&payload[HEADER_LEN..me]))?;let models=decode_models(&meta,count)?;let transformed=pithos_native_v7::decode_exact_dedup(&payload[me..ne],transformed_len)?;restore(&transformed,&models,expected)}
+pub fn decode_exact_dedup(payload: &[u8], expected: u64) -> Result<Vec<u8>> {
+    if payload.len() < HEADER_LEN || &payload[..4] != MAGIC {
+        return pithos_native_v7::decode_exact_dedup(payload, expected);
+    }
+    if read_u16(payload, 4)? != 8 || read_u64(payload, 8)? != expected {
+        return Err(PithosError::InvalidMetadata("nested deflate header"));
+    }
+    let transformed_len = read_u64(payload, 16)?;
+    let count = read_u32(payload, 24)? as usize;
+    let ml = read_u32(payload, 28)? as usize;
+    let nl = read_u64(payload, 32)? as usize;
+    let me = HEADER_LEN
+        .checked_add(ml)
+        .ok_or(PithosError::IntegerOverflow)?;
+    let ne = me.checked_add(nl).ok_or(PithosError::IntegerOverflow)?;
+    if ne != payload.len() {
+        return Err(PithosError::InvalidRange);
+    }
+    let meta = zstd::stream::decode_all(Cursor::new(&payload[HEADER_LEN..me]))?;
+    let models = decode_models(&meta, count)?;
+    let transformed = pithos_native_v7::decode_exact_dedup(&payload[me..ne], transformed_len)?;
+    restore(&transformed, &models, expected)
+}
 
-fn model_member(data:&[u8])->Result<Option<(Vec<u8>,Member)>>{let ranges=if data.starts_with(b"PK\x03\x04"){zip_ranges(data)}else if data.starts_with(b"%PDF-"){pdf_ranges(data)}else{Vec::new()};if ranges.is_empty(){return Ok(None);}let mut decoded_all=Vec::new();let mut metas=Vec::new();let prefix=data[..ranges[0].0].to_vec();let mut gaps=Vec::new();for(i,r)in ranges.iter().enumerate(){let compressed=&data[r.0..r.1];let decoded=decode_stream(compressed,r.2)?;let canonical=encode_stream(&decoded,r.2)?;let delta=make_delta(&canonical,compressed)?;decoded_all.extend_from_slice(&decoded);metas.push(StreamMeta{kind:r.2,decoded_len:decoded.len()as u64,delta});let next=if i+1<ranges.len(){ranges[i+1].0}else{data.len()};gaps.push(data[r.1..next].to_vec());}let metadata_cost=prefix.len()+gaps.iter().map(Vec::len).sum::<usize>()+metas.iter().map(|m|m.delta.middle.len()+24).sum::<usize>();if metadata_cost>=data.len(){return Ok(None);}let transformed_len=decoded_all.len()as u64;Ok(Some((decoded_all,Member::Nested{transformed_len,prefix,gaps,streams:metas})))}
+fn model_member(data: &[u8]) -> Result<Option<(Vec<u8>, Member)>> {
+    let ranges = if data.starts_with(b"PK\x03\x04") {
+        zip_ranges(data)
+    } else if data.starts_with(b"%PDF-") {
+        pdf_ranges(data)
+    } else {
+        Vec::new()
+    };
+    if ranges.is_empty() {
+        return Ok(None);
+    }
+    let mut decoded_all = Vec::new();
+    let mut metas = Vec::new();
+    let prefix = data[..ranges[0].0].to_vec();
+    let mut gaps = Vec::new();
+    for (i, r) in ranges.iter().enumerate() {
+        let compressed = &data[r.0..r.1];
+        let decoded = decode_stream(compressed, r.2)?;
+        let canonical = encode_stream(&decoded, r.2)?;
+        let delta = make_delta(&canonical, compressed)?;
+        decoded_all.extend_from_slice(&decoded);
+        metas.push(StreamMeta {
+            kind: r.2,
+            decoded_len: decoded.len() as u64,
+            delta,
+        });
+        let next = if i + 1 < ranges.len() {
+            ranges[i + 1].0
+        } else {
+            data.len()
+        };
+        gaps.push(data[r.1..next].to_vec());
+    }
+    let metadata_cost = prefix.len()
+        + gaps.iter().map(Vec::len).sum::<usize>()
+        + metas
+            .iter()
+            .map(|m| m.delta.middle.len() + 24)
+            .sum::<usize>();
+    if metadata_cost >= data.len() {
+        return Ok(None);
+    }
+    let transformed_len = decoded_all.len() as u64;
+    Ok(Some((
+        decoded_all,
+        Member::Nested {
+            transformed_len,
+            prefix,
+            gaps,
+            streams: metas,
+        },
+    )))
+}
 
-fn zip_ranges(d:&[u8])->Vec<(usize,usize,Kind)>{let mut ranges=Vec::new();let mut p=0usize;while p+30<=d.len()&&&d[p..p+4]==b"PK\x03\x04"{let flags=u16::from_le_bytes([d[p+6],d[p+7]]);let method=u16::from_le_bytes([d[p+8],d[p+9]]);let comp=u32::from_le_bytes([d[p+18],d[p+19],d[p+20],d[p+21]])as usize;let name=u16::from_le_bytes([d[p+26],d[p+27]])as usize;let extra=u16::from_le_bytes([d[p+28],d[p+29]])as usize;let start=match p.checked_add(30+name+extra){Some(v)=>v,None=>break};if start>d.len(){break;}if flags&0x08!=0{break;}let end=match start.checked_add(comp){Some(v)if v<=d.len()=>v,_=>break};if method==8&&comp>0{ranges.push((start,end,Kind::Deflate));}p=end;}ranges}
-fn pdf_ranges(d:&[u8])->Vec<(usize,usize,Kind)>{let mut out=Vec::new();let mut search=0usize;while let Some(rel)=find_bytes(&d[search..],b"/FlateDecode"){let mark=search+rel;let Some(stream_rel)=find_bytes(&d[mark..],b"stream")else{break};let mut start=mark+stream_rel+6;if d.get(start)==Some(&b'\r'){start+=1;}if d.get(start)==Some(&b'\n'){start+=1;}let Some(end_rel)=find_bytes(&d[start..],b"endstream")else{break};let raw_end=start+end_rel;let mut accepted=None;for trim in 0..=2{if raw_end>=start+trim{let end=raw_end-trim;if decode_stream(&d[start..end],Kind::Zlib).is_ok(){accepted=Some(end);break;}}}if let Some(end)=accepted{if out.last().is_none_or(|(_,prev,_)|start>=*prev){out.push((start,end,Kind::Zlib));}search=raw_end+9;}else{search=raw_end+9;}}out}
-fn find_bytes(h:&[u8],n:&[u8])->Option<usize>{if n.is_empty(){return Some(0);}h.windows(n.len()).position(|w|w==n)}
-fn decode_stream(data:&[u8],kind:Kind)->Result<Vec<u8>>{let mut out=Vec::new();match kind{Kind::Deflate=>read_limited(&mut DeflateDecoder::new(data),&mut out)?,Kind::Zlib=>read_limited(&mut ZlibDecoder::new(data),&mut out)?,}Ok(out)}
-fn encode_stream(data:&[u8],kind:Kind)->Result<Vec<u8>>{match kind{Kind::Deflate=>{let mut e=DeflateEncoder::new(Vec::new(),Compression::best());e.write_all(data)?;Ok(e.finish()?)},Kind::Zlib=>{let mut e=ZlibEncoder::new(Vec::new(),Compression::best());e.write_all(data)?;Ok(e.finish()?)}}}
-fn read_limited<R:Read>(r:&mut R,o:&mut Vec<u8>)->Result<()> {let mut b=[0u8;64*1024];loop{let n=r.read(&mut b)?;if n==0{break;}if o.len().checked_add(n).is_none_or(|v|v>MAX_INFLATED){return Err(PithosError::ResourceLimit("nested inflate"));}o.extend_from_slice(&b[..n]);}Ok(())}
+fn zip_ranges(d: &[u8]) -> Vec<(usize, usize, Kind)> {
+    let mut ranges = Vec::new();
+    let mut p = 0usize;
+    while p + 30 <= d.len() && &d[p..p + 4] == b"PK\x03\x04" {
+        let flags = u16::from_le_bytes([d[p + 6], d[p + 7]]);
+        let method = u16::from_le_bytes([d[p + 8], d[p + 9]]);
+        let comp = u32::from_le_bytes([d[p + 18], d[p + 19], d[p + 20], d[p + 21]]) as usize;
+        let name = u16::from_le_bytes([d[p + 26], d[p + 27]]) as usize;
+        let extra = u16::from_le_bytes([d[p + 28], d[p + 29]]) as usize;
+        let start = match p.checked_add(30 + name + extra) {
+            Some(v) => v,
+            None => break,
+        };
+        if start > d.len() {
+            break;
+        }
+        if flags & 0x08 != 0 {
+            break;
+        }
+        let end = match start.checked_add(comp) {
+            Some(v) if v <= d.len() => v,
+            _ => break,
+        };
+        if method == 8 && comp > 0 {
+            ranges.push((start, end, Kind::Deflate));
+        }
+        p = end;
+    }
+    ranges
+}
+fn pdf_ranges(d: &[u8]) -> Vec<(usize, usize, Kind)> {
+    let mut out = Vec::new();
+    let mut search = 0usize;
+    while let Some(rel) = find_bytes(&d[search..], b"/FlateDecode") {
+        let mark = search + rel;
+        let Some(stream_rel) = find_bytes(&d[mark..], b"stream") else {
+            break;
+        };
+        let mut start = mark + stream_rel + 6;
+        if d.get(start) == Some(&b'\r') {
+            start += 1;
+        }
+        if d.get(start) == Some(&b'\n') {
+            start += 1;
+        }
+        let Some(end_rel) = find_bytes(&d[start..], b"endstream") else {
+            break;
+        };
+        let raw_end = start + end_rel;
+        let mut accepted = None;
+        for trim in 0..=2 {
+            if raw_end >= start + trim {
+                let end = raw_end - trim;
+                if decode_stream(&d[start..end], Kind::Zlib).is_ok() {
+                    accepted = Some(end);
+                    break;
+                }
+            }
+        }
+        if let Some(end) = accepted {
+            if out.last().is_none_or(|(_, prev, _)| start >= *prev) {
+                out.push((start, end, Kind::Zlib));
+            }
+            search = raw_end + 9;
+        } else {
+            search = raw_end + 9;
+        }
+    }
+    out
+}
+fn find_bytes(h: &[u8], n: &[u8]) -> Option<usize> {
+    if n.is_empty() {
+        return Some(0);
+    }
+    h.windows(n.len()).position(|w| w == n)
+}
+fn decode_stream(data: &[u8], kind: Kind) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    match kind {
+        Kind::Deflate => read_limited(&mut DeflateDecoder::new(data), &mut out)?,
+        Kind::Zlib => read_limited(&mut ZlibDecoder::new(data), &mut out)?,
+    }
+    Ok(out)
+}
+fn encode_stream(data: &[u8], kind: Kind) -> Result<Vec<u8>> {
+    match kind {
+        Kind::Deflate => {
+            let mut e = DeflateEncoder::new(Vec::new(), Compression::best());
+            e.write_all(data)?;
+            Ok(e.finish()?)
+        }
+        Kind::Zlib => {
+            let mut e = ZlibEncoder::new(Vec::new(), Compression::best());
+            e.write_all(data)?;
+            Ok(e.finish()?)
+        }
+    }
+}
+fn read_limited<R: Read>(r: &mut R, o: &mut Vec<u8>) -> Result<()> {
+    let mut b = [0u8; 64 * 1024];
+    loop {
+        let n = r.read(&mut b)?;
+        if n == 0 {
+            break;
+        }
+        if o.len().checked_add(n).is_none_or(|v| v > MAX_INFLATED) {
+            return Err(PithosError::ResourceLimit("nested inflate"));
+        }
+        o.extend_from_slice(&b[..n]);
+    }
+    Ok(())
+}
 
-fn restore(t:&[u8],models:&[Member],expected:u64)->Result<Vec<u8>>{let mut out=Vec::with_capacity(expected as usize);let mut p=0usize;for m in models{match m{Member::Raw{len}=>{let e=p+*len as usize;out.extend_from_slice(t.get(p..e).ok_or(PithosError::InvalidRange)?);p=e;},Member::Nested{transformed_len,prefix,gaps,streams}=>{let e=p+*transformed_len as usize;let member=t.get(p..e).ok_or(PithosError::InvalidRange)?;out.extend_from_slice(prefix);let mut q=0usize;for(i,s)in streams.iter().enumerate(){let se=q+s.decoded_len as usize;let decoded=member.get(q..se).ok_or(PithosError::InvalidRange)?;let canonical=encode_stream(decoded,s.kind)?;let original=apply_delta(&canonical,&s.delta)?;out.extend_from_slice(&original);out.extend_from_slice(gaps.get(i).ok_or(PithosError::InvalidMetadata("nested gap"))?);q=se;}if q!=member.len(){return Err(PithosError::InvalidRange);}p=e;}}}if p!=t.len()||out.len()as u64!=expected{return Err(PithosError::InvalidRange);}Ok(out)}
-fn make_delta(c:&[u8],o:&[u8])->Result<Delta>{let prefix=c.iter().zip(o).take_while(|(a,b)|a==b).count();let max=c.len().min(o.len()).saturating_sub(prefix);let suffix=c.iter().rev().zip(o.iter().rev()).take(max).take_while(|(a,b)|a==b).count();Ok(Delta{prefix:prefix as u32,suffix:suffix as u32,original_len:o.len()as u32,middle:o[prefix..o.len()-suffix].to_vec()})}
-fn apply_delta(c:&[u8],d:&Delta)->Result<Vec<u8>>{let p=d.prefix as usize;let s=d.suffix as usize;if p+s>c.len(){return Err(PithosError::InvalidMetadata("nested delta"));}let mut o=Vec::with_capacity(d.original_len as usize);o.extend_from_slice(&c[..p]);o.extend_from_slice(&d.middle);o.extend_from_slice(&c[c.len()-s..]);if o.len()!=d.original_len as usize{return Err(PithosError::InvalidRange);}Ok(o)}
+fn restore(t: &[u8], models: &[Member], expected: u64) -> Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(expected as usize);
+    let mut p = 0usize;
+    for m in models {
+        match m {
+            Member::Raw { len } => {
+                let e = p + *len as usize;
+                out.extend_from_slice(t.get(p..e).ok_or(PithosError::InvalidRange)?);
+                p = e;
+            }
+            Member::Nested {
+                transformed_len,
+                prefix,
+                gaps,
+                streams,
+            } => {
+                let e = p + *transformed_len as usize;
+                let member = t.get(p..e).ok_or(PithosError::InvalidRange)?;
+                out.extend_from_slice(prefix);
+                let mut q = 0usize;
+                for (i, s) in streams.iter().enumerate() {
+                    let se = q + s.decoded_len as usize;
+                    let decoded = member.get(q..se).ok_or(PithosError::InvalidRange)?;
+                    let canonical = encode_stream(decoded, s.kind)?;
+                    let original = apply_delta(&canonical, &s.delta)?;
+                    out.extend_from_slice(&original);
+                    out.extend_from_slice(
+                        gaps.get(i)
+                            .ok_or(PithosError::InvalidMetadata("nested gap"))?,
+                    );
+                    q = se;
+                }
+                if q != member.len() {
+                    return Err(PithosError::InvalidRange);
+                }
+                p = e;
+            }
+        }
+    }
+    if p != t.len() || out.len() as u64 != expected {
+        return Err(PithosError::InvalidRange);
+    }
+    Ok(out)
+}
+fn make_delta(c: &[u8], o: &[u8]) -> Result<Delta> {
+    let prefix = c.iter().zip(o).take_while(|(a, b)| a == b).count();
+    let max = c.len().min(o.len()).saturating_sub(prefix);
+    let suffix = c
+        .iter()
+        .rev()
+        .zip(o.iter().rev())
+        .take(max)
+        .take_while(|(a, b)| a == b)
+        .count();
+    Ok(Delta {
+        prefix: prefix as u32,
+        suffix: suffix as u32,
+        original_len: o.len() as u32,
+        middle: o[prefix..o.len() - suffix].to_vec(),
+    })
+}
+fn apply_delta(c: &[u8], d: &Delta) -> Result<Vec<u8>> {
+    let p = d.prefix as usize;
+    let s = d.suffix as usize;
+    if p + s > c.len() {
+        return Err(PithosError::InvalidMetadata("nested delta"));
+    }
+    let mut o = Vec::with_capacity(d.original_len as usize);
+    o.extend_from_slice(&c[..p]);
+    o.extend_from_slice(&d.middle);
+    o.extend_from_slice(&c[c.len() - s..]);
+    if o.len() != d.original_len as usize {
+        return Err(PithosError::InvalidRange);
+    }
+    Ok(o)
+}
 
-fn encode_models(m:&[Member])->Result<Vec<u8>>{let mut o=Vec::new();o.extend_from_slice(&(m.len()as u32).to_le_bytes());for x in m{match x{Member::Raw{len}=>{o.push(0);o.extend_from_slice(&len.to_le_bytes());},Member::Nested{transformed_len,prefix,gaps,streams}=>{o.push(1);o.extend_from_slice(&transformed_len.to_le_bytes());o.extend_from_slice(&(prefix.len()as u32).to_le_bytes());o.extend_from_slice(prefix);o.extend_from_slice(&(streams.len()as u32).to_le_bytes());for(i,s)in streams.iter().enumerate(){o.push(s.kind as u8);o.extend_from_slice(&s.decoded_len.to_le_bytes());encode_delta(&s.delta,&mut o);let g=&gaps[i];o.extend_from_slice(&(g.len()as u32).to_le_bytes());o.extend_from_slice(g);}}}}Ok(o)}
-fn decode_models(d:&[u8],expected:usize)->Result<Vec<Member>>{let c=read_u32(d,0)?as usize;if c!=expected{return Err(PithosError::InvalidMetadata("nested member count"));}let mut p=4;let mut o=Vec::with_capacity(c);for _ in 0..c{let k=*d.get(p).ok_or(PithosError::InvalidRange)?;p+=1;let len=read_u64(d,p)?;p+=8;if k==0{o.push(Member::Raw{len});continue;}if k!=1{return Err(PithosError::InvalidMetadata("nested member"));}let pl=read_u32(d,p)?as usize;p+=4;let pe=p+pl;let prefix=d.get(p..pe).ok_or(PithosError::InvalidRange)?.to_vec();p=pe;let sc=read_u32(d,p)?as usize;p+=4;let mut streams=Vec::with_capacity(sc);let mut gaps=Vec::with_capacity(sc);for _ in 0..sc{let kind=match *d.get(p).ok_or(PithosError::InvalidRange)?{1=>Kind::Deflate,2=>Kind::Zlib,_=>return Err(PithosError::InvalidMetadata("nested stream kind")),};p+=1;let decoded_len=read_u64(d,p)?;p+=8;let delta=decode_delta(d,&mut p)?;let gl=read_u32(d,p)?as usize;p+=4;let ge=p+gl;gaps.push(d.get(p..ge).ok_or(PithosError::InvalidRange)?.to_vec());p=ge;streams.push(StreamMeta{kind,decoded_len,delta});}o.push(Member::Nested{transformed_len:len,prefix,gaps,streams});}if p!=d.len(){return Err(PithosError::InvalidMetadata("nested metadata trailing"));}Ok(o)}
-fn encode_delta(d:&Delta,o:&mut Vec<u8>){o.extend_from_slice(&d.prefix.to_le_bytes());o.extend_from_slice(&d.suffix.to_le_bytes());o.extend_from_slice(&d.original_len.to_le_bytes());o.extend_from_slice(&(d.middle.len()as u32).to_le_bytes());o.extend_from_slice(&d.middle)}fn decode_delta(d:&[u8],p:&mut usize)->Result<Delta>{let a=read_u32(d,*p)?;*p+=4;let b=read_u32(d,*p)?;*p+=4;let c=read_u32(d,*p)?;*p+=4;let l=read_u32(d,*p)?as usize;*p+=4;let e=*p+l;let middle=d.get(*p..e).ok_or(PithosError::InvalidRange)?.to_vec();*p=e;Ok(Delta{prefix:a,suffix:b,original_len:c,middle})}
-fn convert(s:pithos_native_v7::NativeStats,e:u64)->NativeStats{NativeStats{chunk_count:s.chunk_count,canonical_chunks:s.canonical_chunks,gross_duplicate_bytes:s.gross_duplicate_bytes,representation_bytes:s.representation_bytes,encoded_bytes:e}}
-fn read_u16(b:&[u8],o:usize)->Result<u16>{let s=b.get(o..o+2).ok_or(PithosError::InvalidRange)?;Ok(u16::from_le_bytes([s[0],s[1]]))}fn read_u32(b:&[u8],o:usize)->Result<u32>{let s=b.get(o..o+4).ok_or(PithosError::InvalidRange)?;Ok(u32::from_le_bytes([s[0],s[1],s[2],s[3]]))}fn read_u64(b:&[u8],o:usize)->Result<u64>{let s=b.get(o..o+8).ok_or(PithosError::InvalidRange)?;Ok(u64::from_le_bytes([s[0],s[1],s[2],s[3],s[4],s[5],s[6],s[7]]))}
+fn encode_models(m: &[Member]) -> Result<Vec<u8>> {
+    let mut o = Vec::new();
+    o.extend_from_slice(&(m.len() as u32).to_le_bytes());
+    for x in m {
+        match x {
+            Member::Raw { len } => {
+                o.push(0);
+                o.extend_from_slice(&len.to_le_bytes());
+            }
+            Member::Nested {
+                transformed_len,
+                prefix,
+                gaps,
+                streams,
+            } => {
+                o.push(1);
+                o.extend_from_slice(&transformed_len.to_le_bytes());
+                o.extend_from_slice(&(prefix.len() as u32).to_le_bytes());
+                o.extend_from_slice(prefix);
+                o.extend_from_slice(&(streams.len() as u32).to_le_bytes());
+                for (i, s) in streams.iter().enumerate() {
+                    o.push(s.kind as u8);
+                    o.extend_from_slice(&s.decoded_len.to_le_bytes());
+                    encode_delta(&s.delta, &mut o);
+                    let g = &gaps[i];
+                    o.extend_from_slice(&(g.len() as u32).to_le_bytes());
+                    o.extend_from_slice(g);
+                }
+            }
+        }
+    }
+    Ok(o)
+}
+fn decode_models(d: &[u8], expected: usize) -> Result<Vec<Member>> {
+    let c = read_u32(d, 0)? as usize;
+    if c != expected {
+        return Err(PithosError::InvalidMetadata("nested member count"));
+    }
+    let mut p = 4;
+    let mut o = Vec::with_capacity(c);
+    for _ in 0..c {
+        let k = *d.get(p).ok_or(PithosError::InvalidRange)?;
+        p += 1;
+        let len = read_u64(d, p)?;
+        p += 8;
+        if k == 0 {
+            o.push(Member::Raw { len });
+            continue;
+        }
+        if k != 1 {
+            return Err(PithosError::InvalidMetadata("nested member"));
+        }
+        let pl = read_u32(d, p)? as usize;
+        p += 4;
+        let pe = p + pl;
+        let prefix = d.get(p..pe).ok_or(PithosError::InvalidRange)?.to_vec();
+        p = pe;
+        let sc = read_u32(d, p)? as usize;
+        p += 4;
+        let mut streams = Vec::with_capacity(sc);
+        let mut gaps = Vec::with_capacity(sc);
+        for _ in 0..sc {
+            let kind = match *d.get(p).ok_or(PithosError::InvalidRange)? {
+                1 => Kind::Deflate,
+                2 => Kind::Zlib,
+                _ => return Err(PithosError::InvalidMetadata("nested stream kind")),
+            };
+            p += 1;
+            let decoded_len = read_u64(d, p)?;
+            p += 8;
+            let delta = decode_delta(d, &mut p)?;
+            let gl = read_u32(d, p)? as usize;
+            p += 4;
+            let ge = p + gl;
+            gaps.push(d.get(p..ge).ok_or(PithosError::InvalidRange)?.to_vec());
+            p = ge;
+            streams.push(StreamMeta {
+                kind,
+                decoded_len,
+                delta,
+            });
+        }
+        o.push(Member::Nested {
+            transformed_len: len,
+            prefix,
+            gaps,
+            streams,
+        });
+    }
+    if p != d.len() {
+        return Err(PithosError::InvalidMetadata("nested metadata trailing"));
+    }
+    Ok(o)
+}
+fn encode_delta(d: &Delta, o: &mut Vec<u8>) {
+    o.extend_from_slice(&d.prefix.to_le_bytes());
+    o.extend_from_slice(&d.suffix.to_le_bytes());
+    o.extend_from_slice(&d.original_len.to_le_bytes());
+    o.extend_from_slice(&(d.middle.len() as u32).to_le_bytes());
+    o.extend_from_slice(&d.middle)
+}
+fn decode_delta(d: &[u8], p: &mut usize) -> Result<Delta> {
+    let a = read_u32(d, *p)?;
+    *p += 4;
+    let b = read_u32(d, *p)?;
+    *p += 4;
+    let c = read_u32(d, *p)?;
+    *p += 4;
+    let l = read_u32(d, *p)? as usize;
+    *p += 4;
+    let e = *p + l;
+    let middle = d.get(*p..e).ok_or(PithosError::InvalidRange)?.to_vec();
+    *p = e;
+    Ok(Delta {
+        prefix: a,
+        suffix: b,
+        original_len: c,
+        middle,
+    })
+}
+fn convert(s: pithos_native_v7::NativeStats, e: u64) -> NativeStats {
+    NativeStats {
+        chunk_count: s.chunk_count,
+        canonical_chunks: s.canonical_chunks,
+        gross_duplicate_bytes: s.gross_duplicate_bytes,
+        representation_bytes: s.representation_bytes,
+        encoded_bytes: e,
+    }
+}
+fn read_u16(b: &[u8], o: usize) -> Result<u16> {
+    let s = b.get(o..o + 2).ok_or(PithosError::InvalidRange)?;
+    Ok(u16::from_le_bytes([s[0], s[1]]))
+}
+fn read_u32(b: &[u8], o: usize) -> Result<u32> {
+    let s = b.get(o..o + 4).ok_or(PithosError::InvalidRange)?;
+    Ok(u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
+}
+fn read_u64(b: &[u8], o: usize) -> Result<u64> {
+    let s = b.get(o..o + 8).ok_or(PithosError::InvalidRange)?;
+    Ok(u64::from_le_bytes([
+        s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7],
+    ]))
+}
 
-#[cfg(test)]mod tests{use super::*;#[test]fn zip_parser_is_fail_closed(){assert!(zip_ranges(b"not zip").is_empty());}}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn zip_parser_is_fail_closed() {
+        assert!(zip_ranges(b"not zip").is_empty());
+    }
+}
